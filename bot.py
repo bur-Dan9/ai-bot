@@ -5,23 +5,23 @@ from google.genai import types
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# 1. Настройки окружения
+# 1. Загрузка настроек
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 OWNER_ID = os.environ.get('OWNER_ID') 
 URL = os.environ.get('RENDER_EXTERNAL_URL')
 
-# 2. Настройка Soffi через новый клиент Google GenAI
+# 2. Инициализация Soffi (Gemini 2.0)
 client = genai.Client(api_key=GOOGLE_API_KEY)
-MODEL_ID = "gemini-2.0-flash" # Используем самую актуальную модель
+MODEL_ID = "gemini-2.0-flash" 
 
 SYSTEM_PROMPT = """
-Ты — Soffi, экспертный ассистент awm os. Твоя цель: прогреть локальный бизнес, 
-узнать их бюджет на подписку и обещать уведомить о запуске. 
-Стиль: строгий, но вдохновляющий.
+Ты — Soffi, лицо AI-агентства "awm os". 
+Твой стиль: баланс строгости и вдохновения. 
+Цель: прогреть локальный бизнес, узнать их бюджет на подписку и пообещать уведомление о запуске.
+В проекте более 10 ИИ-ассистентов, ты — единая точка входа.
 """
 
-# Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Здравствуйте! Я Soffi, лицо awm os. 🦾\n"
@@ -29,51 +29,38 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Интересно узнать, как это изменит ваш бизнес?"
     )
 
-# Исправленная команда /check (только латиница!)
-async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Команда только на латинице!
+async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) == str(OWNER_ID):
-        await update.message.reply_text("✅ Связь с владельцем установлена! Отчеты будут приходить сюда.")
+        await update.message.reply_text("✅ Связь с владельцем установлена!")
     else:
-        await update.message.reply_text("Доступ ограничен.")
+        await update.message.reply_text("Доступ только для администрации.")
 
-# Обработка сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    text = update.message.text
-
     try:
-        # Новый способ генерации контента
         response = client.models.generate_content(
             model=MODEL_ID,
-            contents=text,
+            contents=update.message.text,
             config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT)
         )
-        
         await update.message.reply_text(response.text)
 
-        # Отправка отчета владельцу
+        # Отчет владельцу
         if OWNER_ID and str(user.id) != str(OWNER_ID):
-            report = f"📈 **Новый лид!**\n👤: {user.first_name} (@{user.username})\n💬: {text}"
+            report = f"📈 **Новый лид!**\n👤: {user.first_name} (@{user.username})\n💬: {update.message.text}"
             await context.bot.send_message(chat_id=OWNER_ID, text=report)
-
     except Exception as e:
-        print(f"Ошибка: {e}")
-        await update.message.reply_text("Я провожу техническое обновление систем. Попробуйте через минуту.")
+        print(f"Error: {e}")
 
 def main():
     application = Application.builder().token(TOKEN).build()
-    
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("check", check)) # Команда изменена на /check
+    application.add_handler(CommandHandler("check", check_status)) # Заменили /проверка на /check
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     port = int(os.environ.get('PORT', 8443))
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=TOKEN,
-        webhook_url=f"{URL}/{TOKEN}"
-    )
+    application.run_webhook(listen="0.0.0.0", port=port, url_path=TOKEN, webhook_url=f"{URL}/{TOKEN}")
 
 if __name__ == '__main__':
     try:
@@ -84,50 +71,4 @@ if __name__ == '__main__':
             asyncio.set_event_loop(loop)
             main()
         else:
-            raise e        logger.error(f"Ошибка обработки формы: {e}")
-
-async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Общение с ИИ Соффи"""
-    if not client:
-        await update.message.reply_text("Соффи сейчас на техобслуживании. Используйте Mini App.")
-        return
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=update.message.text,
-            config=types.GenerateContentConfig(
-                system_instruction="Ты — Soffi, ассистент awm os. Будь краткой и профессиональной."
-            )
-        )
-        await update.message.reply_text(response.text)
-    except Exception as e:
-        logger.error(f"Ошибка чата: {e}")
-        await update.message.reply_text("Я немного задумалась. Попробуй через минуту.")
-
-# --- ЗАПУСК ---
-
-def main():
-    if not TOKEN or not URL:
-        logger.error("КРИТИЧЕСКАЯ ОШИБКА: Проверь TELEGRAM_TOKEN и RENDER_EXTERNAL_URL!")
-        return
-
-    # Настройка Webhook
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_data))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
-
-    port = int(os.environ.get('PORT', 8443))
-    # Убираем лишний слэш из URL если он есть
-    clean_url = URL.rstrip('/')
-    
-    logger.info(f"Запуск на порту {port}")
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=TOKEN,
-        webhook_url=f"{clean_url}/{TOKEN}"
-    )
-
-if __name__ == '__main__':
-    main()
+            raise e
