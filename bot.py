@@ -5,7 +5,7 @@ import google.generativeai as genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Logging
+# Logging для Render
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -62,12 +62,4 @@ async def main():
     await application.run_webhook(listen="0.0.0.0", port=port, url_path=TOKEN, webhook_url=f"{URL}/{TOKEN}")
 
 if __name__ == '__main__':
-    asyncio.run(main())        main()
-    except RuntimeError as e:
-        if "no current event loop" in str(e):
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            main()
-        else:
-            logger.error(f"Main error: {str(e)}")
-            raise e
+    asyncio.run(main())
