@@ -5,19 +5,19 @@ import google.generativeai as genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Настройка logging для Render (чтобы видеть ошибки в Logs)
+# Logging для Render (чтобы видеть ошибки в Logs)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Загрузка настроек
+# Настройки
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 OWNER_ID = os.environ.get('OWNER_ID')
 URL = os.environ.get('RENDER_EXTERNAL_URL')
 
-# Инициализация Gemini
+# Gemini
 genai.configure(api_key=GOOGLE_API_KEY)
-MODEL_ID = "gemini-1.5-flash"  # Исправленная модель
+MODEL_ID = "gemini-1.5-flash"  # Доступная бесплатная модель
 SYSTEM_PROMPT = """
 Ты — Soffi, лицо AI-агентства "awm os".
 Твой стиль: баланс строгости и вдохновения.
@@ -42,7 +42,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_message = update.message.text
     try:
-        model = genai.GenerativeModel(MODEL_ID, system_instruction=SYSTEM_PROMPT)
+        model = genai.GenerativeModel(model_name=MODEL_ID, system_instruction=SYSTEM_PROMPT)
         response = model.generate_content(user_message)
         ai_reply = response.text
         await update.message.reply_text(ai_reply)
@@ -65,6 +65,13 @@ def main():
 if __name__ == '__main__':
     try:
         main()
+    except RuntimeError as e:
+        if "no current event loop" in str(e):
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            main()
+        else:
+            raise e        main()
     except RuntimeError as e:
         if "no current event loop" in str(e):
             loop = asyncio.new_event_loop()
