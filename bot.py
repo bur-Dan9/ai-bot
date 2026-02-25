@@ -5,7 +5,7 @@ import google.generativeai as genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Logging для Render (чтобы видеть ошибки в Logs)
+# Logging для Render
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ URL = os.environ.get('RENDER_EXTERNAL_URL')
 
 # Gemini
 genai.configure(api_key=GOOGLE_API_KEY)
-MODEL_ID = "gemini-1.5-flash"  # Доступная бесплатная модель
+MODEL_ID = "gemini-1.5-flash"  # Бесплатная модель
 SYSTEM_PROMPT = """
 Ты — Soffi, лицо AI-агентства "awm os".
 Твой стиль: баланс строгости и вдохновения.
@@ -51,7 +51,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             report = f"📈 **Новый лид!**\n👤: {user.first_name} (@{user.username})\n💬: {user_message}"
             await context.bot.send_message(chat_id=OWNER_ID, text=report)
     except Exception as e:
-        logger.error(f"Error in handle_message: {e}")
+        logger.error(f"Error in handle_message: {str(e)}")  # Теперь ошибка в logs Render
         await update.message.reply_text("Извините, произошла ошибка. Попробуйте позже.")
 
 def main():
@@ -71,11 +71,5 @@ if __name__ == '__main__':
             asyncio.set_event_loop(loop)
             main()
         else:
-            raise e        main()
-    except RuntimeError as e:
-        if "no current event loop" in str(e):
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            main()
-        else:
+            logger.error(f"Main error: {str(e)}")
             raise e
