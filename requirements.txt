@@ -1,2 +1,2 @@
 python-telegram-bot[webhooks]==21.10
-openai==1.63.2
+google-generativeai
