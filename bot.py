@@ -1,6 +1,7 @@
 import os
 import asyncio
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -10,12 +11,15 @@ GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 OWNER_ID = os.environ.get('OWNER_ID') 
 URL = os.environ.get('RENDER_EXTERNAL_URL')
 
-# 2. Настройка Soffi
-genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash',
-    system_instruction="Ты — Soffi, экспертный ассистент awm os. Твоя цель: прогреть локальный бизнес, узнать их бюджет на подписку и обещать уведомить о запуске."
-)
+# 2. Настройка Soffi через новый клиент Google GenAI
+client = genai.Client(api_key=GOOGLE_API_KEY)
+MODEL_ID = "gemini-2.0-flash" # Используем самую актуальную модель
+
+SYSTEM_PROMPT = """
+Ты — Soffi, экспертный ассистент awm os. Твоя цель: прогреть локальный бизнес, 
+узнать их бюджет на подписку и обещать уведомить о запуске. 
+Стиль: строгий, но вдохновляющий.
+"""
 
 # Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -25,40 +29,42 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Интересно узнать, как это изменит ваш бизнес?"
     )
 
-# Секретная команда для тебя, чтобы проверить связь
+# Исправленная команда /check (только латиница!)
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) == str(OWNER_ID):
-        await update.message.reply_text("✅ Связь установлена! Я буду присылать отчеты о клиентах сюда.")
+        await update.message.reply_text("✅ Связь с владельцем установлена! Отчеты будут приходить сюда.")
     else:
-        await update.message.reply_text("Извините, эта команда только для администратора.")
+        await update.message.reply_text("Доступ ограничен.")
 
-# Обработка сообщений и отправка отчетов
+# Обработка сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = update.message.text
 
     try:
-        # Ответ клиенту от лица Soffi
-        response = model.generate_content(text)
+        # Новый способ генерации контента
+        response = client.models.generate_content(
+            model=MODEL_ID,
+            contents=text,
+            config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT)
+        )
+        
         await update.message.reply_text(response.text)
 
-        # Отправка отчета тебе в личку (если это пишет НЕ админ)
+        # Отправка отчета владельцу
         if OWNER_ID and str(user.id) != str(OWNER_ID):
-            report = (
-                f"📈 **Новый лид!**\n"
-                f"👤: {user.first_name} (@{user.username})\n"
-                f"💬: {text}"
-            )
+            report = f"📈 **Новый лид!**\n👤: {user.first_name} (@{user.username})\n💬: {text}"
             await context.bot.send_message(chat_id=OWNER_ID, text=report)
 
     except Exception as e:
         print(f"Ошибка: {e}")
+        await update.message.reply_text("Я провожу техническое обновление систем. Попробуйте через минуту.")
 
 def main():
     application = Application.builder().token(TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("проверка", check))
+    application.add_handler(CommandHandler("check", check)) # Команда изменена на /check
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     port = int(os.environ.get('PORT', 8443))
@@ -69,6 +75,16 @@ def main():
         webhook_url=f"{URL}/{TOKEN}"
     )
 
+if __name__ == '__main__':
+    try:
+        main()
+    except RuntimeError as e:
+        if "no current event loop" in str(e):
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            main()
+        else:
+            raise e
 if __name__ == '__main__':
     try:
         main()
