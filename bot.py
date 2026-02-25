@@ -5,7 +5,7 @@ import google.generativeai as genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Logging для Render
+# Logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ URL = os.environ.get('RENDER_EXTERNAL_URL')
 
 # Gemini
 genai.configure(api_key=GOOGLE_API_KEY)
-MODEL_ID = "gemini-1.5-flash"  # Бесплатная модель
+MODEL_ID = "gemini-1.5-flash"
 SYSTEM_PROMPT = """
 Ты — Soffi, лицо AI-агентства "awm os".
 Твой стиль: баланс строгости и вдохновения.
@@ -46,25 +46,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = model.generate_content(user_message)
         ai_reply = response.text
         await update.message.reply_text(ai_reply)
-        # Отчет владельцу
         if OWNER_ID and str(user.id) != str(OWNER_ID):
             report = f"📈 **Новый лид!**\n👤: {user.first_name} (@{user.username})\n💬: {user_message}"
             await context.bot.send_message(chat_id=OWNER_ID, text=report)
     except Exception as e:
-        logger.error(f"Error in handle_message: {str(e)}")  # Теперь ошибка в logs Render
+        logger.error(f"Error: {str(e)}")
         await update.message.reply_text("Извините, произошла ошибка. Попробуйте позже.")
 
-def main():
+async def main():
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("check", check_status))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     port = int(os.environ.get('PORT', 8443))
-    application.run_webhook(listen="0.0.0.0", port=port, url_path=TOKEN, webhook_url=f"{URL}/{TOKEN}")
+    await application.run_webhook(listen="0.0.0.0", port=port, url_path=TOKEN, webhook_url=f"{URL}/{TOKEN}")
 
 if __name__ == '__main__':
-    try:
-        main()
+    asyncio.run(main())        main()
     except RuntimeError as e:
         if "no current event loop" in str(e):
             loop = asyncio.new_event_loop()
