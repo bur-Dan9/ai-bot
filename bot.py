@@ -1,9 +1,9 @@
 import os
 import asyncio
-import json # Добавлено для обработки данных из формы
+import json
 from google import genai
 from google.genai import types
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # 1. Настройки окружения
@@ -22,58 +22,56 @@ SYSTEM_PROMPT = """
 Стиль: строгий, но вдохновляющий. Используй данные из Mini App (имя, ниша), если они доступны.
 """
 
-# --- НОВАЯ КОМАНДА /START С КНОПКОЙ MINI APP ---
+# --- ИСПРАВЛЕННАЯ КОМАНДА /START (Используем ReplyKeyboardMarkup) ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Ссылка на ваше приложение
     web_app_info = WebAppInfo(url="https://min-app-tawny.vercel.app")
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(text="🚀 Войти в awm os", web_app=web_app_info)]
-    ])
+    # Кнопка, которая появится ВМЕСТО КЛАВИАТУРЫ (только так работает sendData)
+    keyboard = ReplyKeyboardMarkup([
+        [KeyboardButton(text="🚀 Запустить awm os", web_app=web_app_info)]
+    ], resize_keyboard=True)
     
     await update.message.reply_text(
-        "Добро пожаловать в будущее. Я — Соффи, ваш интерфейс к системе awm os.\n\n"
-        "Нажмите кнопку ниже, чтобы активировать 10 ИИ-агентов и начать трансформацию вашего бизнеса.",
+        "Добро пожаловать в будущее. Я — Соффи.\n\n"
+        "Чтобы зарегистрироваться в системе, нажмите синюю кнопку «Запустить awm os» внизу экрана.",
         reply_markup=keyboard
     )
 
-# --- ОБРАБОТЧИК ДАННЫХ ИЗ ФОРМЫ MINI APP ---
+# --- ОБРАБОТЧИК ДАННЫХ ИЗ ФОРМЫ (Остается прежним) ---
 async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Получаем данные, отправленные через tg.sendData()
-    data_json = update.effective_message.web_app_data.data
-    data = json.loads(data_json)
-    
-    name = data.get('name', 'Пользователь')
-    niche = data.get('niche', 'Не указана')
-    contact = data.get('contact', 'Не указан')
+    try:
+        data_json = update.effective_message.web_app_data.data
+        data = json.loads(data_json)
+        
+        name = data.get('name', 'Пользователь')
+        niche = data.get('niche', 'Не указана')
+        contact = data.get('contact', 'Не указан')
 
-    # Ответ пользователю от лица Соффи
-    await update.message.reply_text(
-        f"Принято, {name}! 🦾\n\n"
-        f"Я зафиксировала ваш интерес к системе для ниши '{niche}'. "
-        "Мои алгоритмы уже начали предварительный анализ вашего сегмента рынка. "
-        "Я уведомлю вас лично, как только модули будут полностью развернуты!"
-    )
-
-    # Уведомление владельцу (вам)
-    if OWNER_ID:
-        report = (
-            f"🚀 **НОВАЯ ЗАЯВКА ИЗ MINI APP!**\n\n"
-            f"👤 Имя: {name}\n"
-            f"🏢 Ниша: {niche}\n"
-            f"📞 Контакт: {contact}\n"
-            f"🆔 ID: {update.effective_user.id}"
+        await update.message.reply_text(
+            f"Система приняла данные, {name}! 🦾\n\n"
+            f"Ниша '{niche}' поставлена в очередь на AI-анализ. "
+            "Я свяжусь с вами в ближайшее время."
         )
-        await context.bot.send_message(chat_id=OWNER_ID, text=report)
+
+        if OWNER_ID:
+            report = (
+                f"🚀 **НОВАЯ ЗАЯВКА!**\n\n"
+                f"👤 Имя: {name}\n"
+                f"🏢 Ниша: {niche}\n"
+                f"📞 Контакт: {contact}"
+            )
+            await context.bot.send_message(chat_id=OWNER_ID, text=report)
+    except Exception as e:
+        print(f"Ошибка обработки данных: {e}")
 
 # Команда /check
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) == str(OWNER_ID):
-        await update.message.reply_text("✅ Связь с владельцем установлена! Отчеты будут приходить сюда.")
+        await update.message.reply_text("✅ Соффи на связи! Система работает штатно.")
     else:
         await update.message.reply_text("Доступ ограничен.")
 
-# Обычные сообщения (ИИ-чат)
+# ИИ-чат
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = update.message.text
@@ -87,12 +85,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response.text)
 
         if OWNER_ID and str(user.id) != str(OWNER_ID):
-            report = f"📈 **Новое сообщение!**\n👤: {user.first_name} (@{user.username})\n💬: {text}"
+            report = f"📈 **Сообщение:**\n👤: {user.first_name}\n💬: {text}"
             await context.bot.send_message(chat_id=OWNER_ID, text=report)
 
     except Exception as e:
-        print(f"Ошибка: {e}")
-        await update.message.reply_text("Я провожу техническое обновление систем. Попробуйте через минуту.")
+        await update.message.reply_text("Система перегружена. Попробуйте позже.")
 
 def main():
     application = Application.builder().token(TOKEN).build()
@@ -100,9 +97,8 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("check", check))
     
-    # Регистрация обработчика данных из Mini App (ВАЖНО!)
+    # ВАЖНО: Регистрация приема данных
     application.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
-    
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     port = int(os.environ.get('PORT', 8443))
