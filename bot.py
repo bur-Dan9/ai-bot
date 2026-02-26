@@ -1,16 +1,20 @@
 import os
 import requests
+import asyncio
+import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+
+# Logging для Render
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ENV
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 OWNER_ID = os.environ.get("OWNER_ID")
 URL = os.environ.get("RENDER_EXTERNAL_URL")
-
 MODEL = "gemini-1.5-flash"
-
 SYSTEM_PROMPT = """
 Ты — Soffi, лицо AI-агентства "awm os".
 Твой стиль: баланс строгости и вдохновения.
@@ -19,7 +23,6 @@ SYSTEM_PROMPT = """
 
 def ask_gemini(user_text):
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent?key={GOOGLE_API_KEY}"
-
     payload = {
         "contents": [
             {
@@ -33,15 +36,14 @@ def ask_gemini(user_text):
             "maxOutputTokens": 800
         }
     }
-
-    response = requests.post(endpoint, json=payload, timeout=30)
-
-    if response.status_code != 200:
-        raise Exception(response.text)
-
-    data = response.json()
-    return data["candidates"][0]["content"]["parts"][0]["text"]
-
+    try:
+        response = requests.post(endpoint, json=payload, timeout=30)
+        response.raise_for_status()  # Raise error if not 200
+        data = response.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        logger.error(f"Gemini API error: {str(e)}")
+        raise
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -50,13 +52,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Интересно узнать, как это изменит ваш бизнес?"
     )
 
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     try:
         answer = ask_gemini(update.message.text)
         await update.message.reply_text(answer)
-
         # Отчет владельцу
         if OWNER_ID and str(user.id) != str(OWNER_ID):
             report = (
@@ -65,26 +65,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"💬 {update.message.text}"
             )
             await context.bot.send_message(chat_id=OWNER_ID, text=report)
-
     except Exception as e:
         await update.message.reply_text("⚠️ Ошибка Gemini API")
-        print("Gemini error:", e)
+        logger.error(f"Handle message error: {str(e)}")
 
-
-def main():
+async def main():
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
     port = int(os.environ.get("PORT", 10000))
-
-application.run_webhook(
-    listen="0.0.0.0",
-    port=port,
-    url_path=TOKEN,
-    webhook_url=f"{URL}/{TOKEN}"
-)
-
+    await application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=TOKEN,
+        webhook_url=f"{URL}/{TOKEN}"
+    )
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
