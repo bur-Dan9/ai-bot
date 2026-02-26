@@ -5,11 +5,11 @@ import google.generativeai as genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Logging for Render
+# Логирование для Render
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Settings
+# Настройки
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 OWNER_ID = os.environ.get('OWNER_ID')
@@ -64,24 +64,8 @@ async def main():
         port=port,
         url_path=TOKEN,
         webhook_url=f"{URL}/{TOKEN}",
-        close_loop=False
+        close_loop=False  # Fix: Prevent closing running loop
     )
 
 if __name__ == '__main__':
-    asyncio.run(main())        await update.message.reply_text("⚠️ Ошибка Gemini API")
-        logger.error(f"Handle message error: {str(e)}")
-
-async def main():
-    application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    port = int(os.environ.get("PORT", 10000))
-    await application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=TOKEN,
-        webhook_url=f"{URL}/{TOKEN}"
-    )
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main())  # Здесь должно быть только это
