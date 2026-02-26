@@ -1,23 +1,26 @@
 import os
 import asyncio
-from google import genai
-from google.genai import types
+import logging
+import google.generativeai as genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# 1. Загрузка настроек
+# Логирование для Render
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Настройки
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
-OWNER_ID = os.environ.get('OWNER_ID') 
+OWNER_ID = os.environ.get('OWNER_ID')
 URL = os.environ.get('RENDER_EXTERNAL_URL')
 
-# 2. Инициализация Soffi (Gemini 2.0)
-client = genai.Client(api_key=GOOGLE_API_KEY)
-MODEL_ID = "gemini-2.0-flash" 
-
+# Gemini
+genai.configure(api_key=GOOGLE_API_KEY)
+MODEL_ID = "gemini-1.5-flash"
 SYSTEM_PROMPT = """
-Ты — Soffi, лицо AI-агентства "awm os". 
-Твой стиль: баланс строгости и вдохновения. 
+Ты — Soffi, лицо AI-агентства "awm os".
+Твой стиль: баланс строгости и вдохновения.
 Цель: прогреть локальный бизнес, узнать их бюджет на подписку и пообещать уведомление о запуске.
 В проекте более 10 ИИ-ассистентов, ты — единая точка входа.
 """
@@ -29,7 +32,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Интересно узнать, как это изменит ваш бизнес?"
     )
 
-# Команда только на латинице!
 async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) == str(OWNER_ID):
         await update.message.reply_text("✅ Связь с владельцем установлена!")
@@ -38,34 +40,45 @@ async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    user_message = update.message.text
     try:
-        response = client.models.generate_content(
-            model=MODEL_ID,
-            contents=update.message.text,
-            config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT)
-        )
-        await update.message.reply_text(response.text)
-
-        # Отчет владельцу
+        model = genai.GenerativeModel(model_name=MODEL_ID, system_instruction=SYSTEM_PROMPT)
+        response = model.generate_content(user_message)
+        ai_reply = response.text
+        await update.message.reply_text(ai_reply)
         if OWNER_ID and str(user.id) != str(OWNER_ID):
-            report = f"📈 **Новый лид!**\n👤: {user.first_name} (@{user.username})\n💬: {update.message.text}"
+            report = f"📈 **Новый лид!**\n👤: {user.first_name} (@{user.username})\n💬: {user_message}"
             await context.bot.send_message(chat_id=OWNER_ID, text=report)
     except Exception as e:
-        print(f"Error: {e}")
+        logger.error(f"Error in handle_message: {str(e)}")
+        await update.message.reply_text("Извините, произошла ошибка. Попробуйте позже.")
 
-def main():
+async def main():
+    # Создаем приложение для бота
     application = Application.builder().token(TOKEN).build()
+
+    # Добавляем обработчики команд
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("check", check_status)) # Заменили /проверка на /check
+    application.add_handler(CommandHandler("check", check_status))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    port = int(os.environ.get('PORT', 8443))
-    application.run_webhook(listen="0.0.0.0", port=port, url_path=TOKEN, webhook_url=f"{URL}/{TOKEN}")
+    # Получаем порт из переменных окружения или по умолчанию 8443
+    port = int(os.environ.get('PORT', 10000))
+
+    # Запуск вебхука
+    await application.run_webhook(
+        listen="0.0.0.0",  # Слушаем все адреса
+        port=port,  # Порт, на котором будет работать сервер
+        url_path=TOKEN,  # Путь для вебхука
+        webhook_url=f"{URL}/{TOKEN}",  # Полный URL для вебхука
+        close_loop=False  # Останавливать цикл не нужно
+    )
 
 if __name__ == '__main__':
     try:
-        main()
-    except RuntimeError as e:
+        asyncio.run(main())  # Запуск основной асинхронной функции
+    except Exception as e:
+        logger.error(f"Ошибка при запуске: {e}")
         if "no current event loop" in str(e):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
