@@ -8,7 +8,7 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 OWNER_ID = os.environ.get("OWNER_ID")
 URL = os.environ.get("RENDER_EXTERNAL_URL")
 
-MODEL = "gemini-1.5-flash"
+MODEL = "gemini-2.0-flash"  # быстрее
 
 SYSTEM_PROMPT = (
     "Ты — Soffi, лицо AI-агентства 'awm os'.\n"
@@ -28,7 +28,8 @@ def ask_gemini(user_text: str) -> str:
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 800},
     }
 
-    r = requests.post(endpoint, params=params, json=payload, timeout=45)
+    # НЕ делаем 45 сек — это часто убивает webhook на бесплатном Render
+    r = requests.post(endpoint, params=params, json=payload, timeout=20)
     if r.status_code != 200:
         raise RuntimeError(f"Gemini API error {r.status_code}: {r.text}")
 
@@ -46,6 +47,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = update.message.text or ""
 
+    # Быстрый ответ, чтобы Telegram не получил timeout
+    await update.message.reply_text("⌛️ Думаю…")
+
     try:
         answer = ask_gemini(text)
         await update.message.reply_text(answer)
@@ -59,8 +63,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Ошибка. Попробуйте ещё раз через минуту.")
 
 def main():
-    if not TOKEN or not URL:
-        raise RuntimeError("Missing TELEGRAM_TOKEN or RENDER_EXTERNAL_URL env vars")
+    if not TOKEN:
+        raise RuntimeError("Missing TELEGRAM_TOKEN")
+    if not URL:
+        raise RuntimeError("Missing RENDER_EXTERNAL_URL")
+    if not GOOGLE_API_KEY:
+        raise RuntimeError("Missing GOOGLE_API_KEY")
 
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
@@ -75,16 +83,4 @@ def main():
     )
 
 if __name__ == "__main__":
-    main()    await application.run_webhook(
-        listen="0.0.0.0",  # Слушаем все адреса
-        port=port,  # Порт, на котором будет работать сервер
-        url_path=TOKEN,  # Путь для вебхука
-        webhook_url=f"{URL}/{TOKEN}",  # Полный URL для вебхука
-        close_loop=False  # Останавливать цикл не нужно
-    )
-
-if __name__ == '__main__':
-    try:
-        asyncio.run(main())  # Запуск основной асинхронной функции
-    except Exception as e:
-        logger.error(f"Ошибка при запуске: {e}")
+    main()
