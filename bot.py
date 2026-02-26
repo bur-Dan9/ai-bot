@@ -78,12 +78,12 @@ def main():
 
     port = int(os.environ.get("PORT", 10000))
 
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=TOKEN,
-        webhook_url=f"{URL}/{TOKEN}",
-    )
+application.run_webhook(
+    listen="0.0.0.0",
+    port=port,
+    url_path=TOKEN,
+    webhook_url=f"{URL}/{TOKEN}"
+)
 
 
 if __name__ == "__main__":
