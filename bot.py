@@ -63,7 +63,7 @@ async def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Получаем порт из переменных окружения или по умолчанию 8443
-    port = int(os.environ.get('PORT', 10000))
+    port = int(os.environ.get('PORT', 8443))
 
     # Запуск вебхука
     await application.run_webhook(
@@ -79,10 +79,3 @@ if __name__ == '__main__':
         asyncio.run(main())  # Запуск основной асинхронной функции
     except Exception as e:
         logger.error(f"Ошибка при запуске: {e}")
-        if "no current event loop" in str(e):
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            main()
-        else:
-            raise eif __name__ == '__main__':
-    asyncio.run(main())  # Здесь должно быть только это
