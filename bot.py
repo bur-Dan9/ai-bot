@@ -1,72 +1,81 @@
 import os
-import asyncio
-import logging
-import google.generativeai as genai
+import requests
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Логирование для Render
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
+TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+OWNER_ID = os.environ.get("OWNER_ID")
+URL = os.environ.get("RENDER_EXTERNAL_URL")
 
-# Настройки
-TOKEN = os.environ.get('TELEGRAM_TOKEN')
-GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
-OWNER_ID = os.environ.get('OWNER_ID')
-URL = os.environ.get('RENDER_EXTERNAL_URL')
+MODEL = "gemini-1.5-flash"
 
-# Gemini
-genai.configure(api_key=GOOGLE_API_KEY)
-MODEL_ID = "gemini-1.5-flash"
-SYSTEM_PROMPT = """
-Ты — Soffi, лицо AI-агентства "awm os".
-Твой стиль: баланс строгости и вдохновения.
-Цель: прогреть локальный бизнес, узнать их бюджет на подписку и пообещать уведомление о запуске.
-В проекте более 10 ИИ-ассистентов, ты — единая точка входа.
-"""
+SYSTEM_PROMPT = (
+    "Ты — Soffi, лицо AI-агентства 'awm os'.\n"
+    "Твой стиль: баланс строгости и вдохновения.\n"
+    "Цель: прогреть локальный бизнес, узнать их бюджет на подписку и пообещать уведомление о запуске.\n"
+    "В проекте более 10 ИИ-ассистентов, ты — единая точка входа.\n"
+)
+
+def ask_gemini(user_text: str) -> str:
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
+    params = {"key": GOOGLE_API_KEY}
+
+    payload = {
+        "contents": [
+            {"parts": [{"text": f"{SYSTEM_PROMPT}\n\nСообщение пользователя: {user_text}"}]}
+        ],
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 800},
+    }
+
+    r = requests.post(endpoint, params=params, json=payload, timeout=45)
+    if r.status_code != 200:
+        raise RuntimeError(f"Gemini API error {r.status_code}: {r.text}")
+
+    data = r.json()
+    return data["candidates"][0]["content"]["parts"][0]["text"]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Здравствуйте! Я Soffi, лицо awm os. 🦾\n"
-        "Мы создаем ИИ-организм для полной автоматизации вашего маркетинга. "
+        "Здравствуйте! Я Soffi 🦾\n"
+        "Мы создаем ИИ-организм для автоматизации маркетинга.\n"
         "Интересно узнать, как это изменит ваш бизнес?"
     )
 
-async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_user.id) == str(OWNER_ID):
-        await update.message.reply_text("✅ Связь с владельцем установлена!")
-    else:
-        await update.message.reply_text("Доступ только для администрации.")
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    user_message = update.message.text
+    text = update.message.text or ""
+
     try:
-        model = genai.GenerativeModel(model_name=MODEL_ID, system_instruction=SYSTEM_PROMPT)
-        response = model.generate_content(user_message)
-        ai_reply = response.text
-        await update.message.reply_text(ai_reply)
+        answer = ask_gemini(text)
+        await update.message.reply_text(answer)
+
         if OWNER_ID and str(user.id) != str(OWNER_ID):
-            report = f"📈 **Новый лид!**\n👤: {user.first_name} (@{user.username})\n💬: {user_message}"
-            await context.bot.send_message(chat_id=OWNER_ID, text=report)
+            report = f"📈 Новый лид!\n👤 {user.first_name} (@{user.username})\n💬 {text}"
+            await context.bot.send_message(chat_id=int(OWNER_ID), text=report)
+
     except Exception as e:
-        logger.error(f"Error in handle_message: {str(e)}")
-        await update.message.reply_text("Извините, произошла ошибка. Попробуйте позже.")
+        print("Error:", e)
+        await update.message.reply_text("⚠️ Ошибка. Попробуйте ещё раз через минуту.")
 
-async def main():
-    # Создаем приложение для бота
+def main():
+    if not TOKEN or not URL:
+        raise RuntimeError("Missing TELEGRAM_TOKEN or RENDER_EXTERNAL_URL env vars")
+
     application = Application.builder().token(TOKEN).build()
-
-    # Добавляем обработчики команд
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("check", check_status))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Получаем порт из переменных окружения или по умолчанию 8443
-    port = int(os.environ.get('PORT', 8443))
+    port = int(os.environ.get("PORT", "10000"))
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=TOKEN,
+        webhook_url=f"{URL}/{TOKEN}",
+    )
 
-    # Запуск вебхука
-    await application.run_webhook(
+if __name__ == "__main__":
+    main()    await application.run_webhook(
         listen="0.0.0.0",  # Слушаем все адреса
         port=port,  # Порт, на котором будет работать сервер
         url_path=TOKEN,  # Путь для вебхука
