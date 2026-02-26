@@ -1,2 +1,2 @@
 python-telegram-bot[webhooks]==21.10
-google-genai
+requests==2.32.5
