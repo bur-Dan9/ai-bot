@@ -111,19 +111,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()        raise RuntimeError("Missing GOOGLE_API_KEY")
-
-    application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    port = int(os.environ.get("PORT", "10000"))
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=TOKEN,
-        webhook_url=f"{URL}/{TOKEN}",
-    )
-
-if __name__ == "__main__":
     main()
