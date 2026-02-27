@@ -3,6 +3,8 @@ import asyncio
 import re
 import requests
 import json
+import hmac
+import hashlib
 from datetime import datetime, timezone
 from aiohttp import web
 
@@ -14,6 +16,9 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 OWNER_ID = os.environ.get("OWNER_ID")
+
+# твой Render URL (можно оставить так)
+BASE_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://ai-bot-a3aj.onrender.com").rstrip("/")
 
 # ===== GEMINI =====
 MODEL = "gemini-2.5-flash"
@@ -44,6 +49,9 @@ GLOBAL_LIMIT = {
     "count": 0,
     "blocked_date": None,  # если словили квоту/429 — блокируем до конца дня (UTC)
 }
+
+# глобальный объект приложения (нужен webhook handler)
+tg_app: Application | None = None
 
 
 def _extract_name(text: str) -> str | None:
@@ -150,7 +158,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["history"] = []
         await update.message.reply_text(WELCOME_TEXT)
 
-    # вместо "⌛️ Думаю…" — typing...
+    # typing...
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     except:
@@ -218,33 +226,58 @@ async def health(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+async def webhook_handler(request: web.Request) -> web.Response:
+    """
+    Telegram будет слать сюда апдейты. Мы прокидываем их в python-telegram-bot.
+    """
+    global tg_app
+    try:
+        data = await request.json()
+    except:
+        return web.Response(status=400, text="bad json")
+
+    if tg_app is None:
+        return web.Response(status=503, text="bot not ready")
+
+    update = Update.de_json(data, tg_app.bot)
+    await tg_app.process_update(update)
+    return web.Response(text="ok")
+
+
 async def main_async():
+    global tg_app
+
     if not TOKEN:
         raise RuntimeError("Missing TELEGRAM_TOKEN")
     if not GOOGLE_API_KEY:
         raise RuntimeError("Missing GOOGLE_API_KEY")
 
-    # Telegram polling
+    # 1) Telegram Application (без polling)
     tg_app = Application.builder().token(TOKEN).build()
     tg_app.add_handler(CommandHandler("start", start))
     tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     await tg_app.initialize()
     await tg_app.start()
-    await tg_app.updater.start_polling(drop_pending_updates=True)
 
-    # HTTP server for Render
+    # 2) HTTP server for Render (webhook + health)
     port = int(os.environ.get("PORT", "10000"))
     web_app = web.Application()
     web_app.router.add_get("/", health)
     web_app.router.add_get("/health", health)
+    web_app.router.add_post("/webhook", webhook_handler)
 
     runner = web.AppRunner(web_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-    print("✅ Bot started (polling) + /health ok")
+    # 3) Устанавливаем webhook на Render URL
+    webhook_url = f"{BASE_URL}/webhook"
+    await tg_app.bot.delete_webhook(drop_pending_updates=True)
+    ok = await tg_app.bot.set_webhook(url=webhook_url)
+
+    print(f"✅ Bot started (webhook) on {webhook_url}, set_webhook={ok}")
     await asyncio.Event().wait()
 
 
