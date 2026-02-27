@@ -2,6 +2,7 @@ import os
 import asyncio
 import re
 import requests
+from datetime import datetime, timezone
 from aiohttp import web
 
 from telegram import Update
@@ -13,33 +14,40 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 OWNER_ID = os.environ.get("OWNER_ID")
 
-# ===== Gemini =====
+# ===== GEMINI =====
 MODEL = "gemini-2.5-flash"
 
-# Важно: системный промпт НЕ должен заставлять представляться каждый раз
 SYSTEM_PROMPT = (
     "Ты — Soffi, AI-ассистент агентства 'awm os'.\n"
     "Правила:\n"
     "1) НЕ представляйся заново в каждом ответе.\n"
-    "2) Будь краткой и по делу.\n"
-    "3) Запоминай имя пользователя, если он его сказал.\n"
-    "4) Если пользователь спрашивает 'как меня зовут?' — отвечай именем, если оно уже было.\n"
-    "5) Цель: помогать, мягко вести к обсуждению задач бизнеса и бюджета на подписку.\n"
+    "2) Пиши кратко и по делу, без воды.\n"
+    "3) Задавай 1-2 уточняющих вопроса, если нужно.\n"
+    "4) Запоминай контекст диалога и имя пользователя (если он назвал).\n"
+    "5) Цель: помогать и мягко вести к обсуждению задач бизнеса и бюджета на подписку.\n"
 )
 
 WELCOME_TEXT = (
     "Привет! Я Soffi 🦾\n"
-    "Я помогу понять, как ИИ может ускорить маркетинг и продажи.\n"
-    "Для начала: чем занимаетесь и в каком городе/нише?"
+    "Помогаю понять, как ИИ может ускорить маркетинг и продажи.\n"
+    "Для начала: чем занимаетесь и в какой нише/городе?"
 )
 
-MAX_TURNS = 12  # сколько последних обменов (user+assistant) хранить на пользователя
+# ===== MEMORY =====
+MAX_TURNS = 12  # хранить последние 12 обменов (user+assistant) на пользователя
+
+# ===== GLOBAL LIMIT (2-layer) =====
+MAX_REQUESTS_PER_DAY = 200
+GLOBAL_LIMIT = {
+    "date": None,          # "YYYY-MM-DD"
+    "count": 0,
+    "blocked_date": None,  # если словили квоту/429 — блокируем до конца дня (UTC)
+}
 
 
 def _extract_name(text: str) -> str | None:
-    """Простая попытка вытащить имя из фраз типа 'меня зовут Даниил'."""
+    """Очень простая попытка извлечь имя из фраз."""
     t = text.strip()
-
     patterns = [
         r"\bменя\s+зовут\s+([A-Za-zА-Яа-яЁё\-]{2,30})\b",
         r"\bя\s+([A-Za-zА-Яа-яЁё\-]{2,30})\b",
@@ -54,25 +62,24 @@ def _extract_name(text: str) -> str | None:
 
 
 def ask_gemini(contents: list[dict]) -> str:
-    """contents: список сообщений формата Gemini: {role: 'user'|'model', parts:[{text:...}]}"""
+    """
+    contents: список сообщений формата Gemini:
+    {"role": "user"|"model", "parts":[{"text":"..."}]}
+    """
     if not GOOGLE_API_KEY:
         raise RuntimeError("Missing GOOGLE_API_KEY")
 
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
-
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "contents": contents,
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 800,
-        },
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 700},
     }
 
     r = requests.post(endpoint, params={"key": GOOGLE_API_KEY}, json=payload, timeout=20)
 
     if r.status_code == 429:
-        raise RuntimeError("429: rate limit / quota exceeded")
+        raise RuntimeError("429: quota/rate limit")
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text}")
 
@@ -90,10 +97,38 @@ def ask_gemini(contents: list[dict]) -> str:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Приветствие один раз + очистка памяти на /start
+    # приветствие 1 раз + сброс памяти по /start
     context.user_data["introduced"] = True
     context.user_data["history"] = []
     await update.message.reply_text(WELCOME_TEXT)
+
+
+def _check_and_update_global_limit() -> tuple[bool, str | None]:
+    """
+    Возвращает (allowed, reason)
+    reason: текст для пользователя если запрещено
+    """
+    today = datetime.now(timezone.utc).date()
+    today_s = str(today)
+
+    # если уже заблокировали на сегодня из-за квоты — закрыто
+    if GLOBAL_LIMIT.get("blocked_date") == today_s:
+        return False, "⚠️ Лимит на сегодня исчерпан. Попробуйте завтра."
+
+    # новый день — сброс
+    if GLOBAL_LIMIT.get("date") != today_s:
+        GLOBAL_LIMIT["date"] = today_s
+        GLOBAL_LIMIT["count"] = 0
+        GLOBAL_LIMIT["blocked_date"] = None
+
+    # достигли лимита
+    if GLOBAL_LIMIT["count"] >= MAX_REQUESTS_PER_DAY:
+        GLOBAL_LIMIT["blocked_date"] = today_s
+        return False, "⚠️ Лимит на сегодня исчерпан. Попробуйте завтра."
+
+    # считаем попытку заранее (защита от спама)
+    GLOBAL_LIMIT["count"] += 1
+    return True, None
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -102,65 +137,79 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         return
 
-    # Если пользователь ещё не запускал /start — поздороваемся один раз
+    # Глобальный лимит (2 слоя)
+    allowed, reason = _check_and_update_global_limit()
+    if not allowed:
+        await update.message.reply_text(reason)
+        return
+
+    # приветствие только 1 раз (если пользователь не нажимал /start)
     if not context.user_data.get("introduced"):
         context.user_data["introduced"] = True
         context.user_data["history"] = []
         await update.message.reply_text(WELCOME_TEXT)
 
-    # Вместо отдельного сообщения "Думаю..." покажем "печатает..."
+    # вместо "⌛️ Думаю…" — typing...
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     except:
         pass
 
-    # Поймаем имя
+    # имя пользователя
     name = _extract_name(text)
     if name:
         context.user_data["user_name"] = name
 
-    # История диалога (память)
+    # память (история)
     history = context.user_data.get("history", [])
 
-    # Добавляем сообщение пользователя
-    history.append({"role": "user", "parts": [{"text": text}]})
-
-    # Подмешаем имя (если есть) как дополнительный контекст в последний user-message
+    # сообщение пользователя
     user_name = context.user_data.get("user_name")
-    if user_name and len(history) >= 1 and history[-1]["role"] == "user":
-        history[-1]["parts"][0]["text"] = f"(Имя пользователя: {user_name})\n{text}"
+    if user_name:
+        user_text_for_model = f"(Имя пользователя: {user_name})\n{text}"
+    else:
+        user_text_for_model = text
 
-    # Обрезаем историю
+    history.append({"role": "user", "parts": [{"text": user_text_for_model}]})
     history = history[-(MAX_TURNS * 2):]
 
     try:
         answer = ask_gemini(history)
         await update.message.reply_text(answer)
 
-        # Сохраняем ответ в историю
+        # сохраняем ответ в историю
         history.append({"role": "model", "parts": [{"text": answer}]})
         history = history[-(MAX_TURNS * 2):]
         context.user_data["history"] = history
 
-        # Репорт владельцу
+        # репорт владельцу о лидах (не владельцу)
         if OWNER_ID and str(user.id) != str(OWNER_ID):
-            report = f"📈 Новый лид!\n👤 {user.first_name} (@{user.username})\n💬 {text}"
+            report = (
+                f"📈 Новый лид!\n"
+                f"👤 {user.first_name} (@{user.username})\n"
+                f"💬 {text}"
+            )
             await context.bot.send_message(chat_id=int(OWNER_ID), text=report)
 
     except Exception as e:
         err = str(e)
+        low = err.lower()
         print("Gemini error:", err)
 
+        # 2-я защита: словили квоту/429 => блокируем до конца дня (UTC)
+        if "429" in err or "resource_exhausted" in low or "quota" in low or "rate limit" in low:
+            GLOBAL_LIMIT["blocked_date"] = str(datetime.now(timezone.utc).date())
+            await update.message.reply_text("⚠️ Бесплатный лимит на сегодня исчерпан. Попробуйте завтра.")
+            return
+
+        # отправим владельцу точную ошибку
         if OWNER_ID:
             try:
                 await context.bot.send_message(chat_id=int(OWNER_ID), text=f"❌ Gemini error:\n{err}")
             except:
                 pass
 
-        if "429" in err:
-            await update.message.reply_text("⚠️ Слишком много запросов/лимит. Попробуйте через минуту.")
-        else:
-            await update.message.reply_text("⚠️ Ошибка. Попробуйте ещё раз через минуту.")
+        await update.message.reply_text("⚠️ Ошибка. Попробуйте ещё раз через минуту.")
 
 
 # ===== /health for Render + UptimeRobot =====
