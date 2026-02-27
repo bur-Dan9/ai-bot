@@ -14,6 +14,7 @@ import asyncpg
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+
 print("### BUILD: WEBSITE_GREETING_V2 ###", flush=True)
 
 # ============================================================
@@ -24,12 +25,13 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 OWNER_ID = os.environ.get("OWNER_ID")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# BOT_USERNAME = username бота без "@"
+# username бота без "@", например: AWMOS_bot
 BOT_USERNAME = os.environ.get("BOT_USERNAME")
 
-# REPORT_TASK_TOKEN = секрет для /tasks/daily_report
+# секрет для /tasks/daily_report
 REPORT_TASK_TOKEN = os.environ.get("REPORT_TASK_TOKEN")
 
+# Render URL
 BASE_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://ai-bot-a3aj.onrender.com").rstrip("/")
 
 # ============================================================
@@ -122,6 +124,7 @@ def ask_gemini(contents: list[dict]) -> str:
     }
 
     r = requests.post(endpoint, params={"key": GOOGLE_API_KEY}, json=payload, timeout=20)
+
     if r.status_code == 429:
         raise RuntimeError("429: quota/rate limit")
     if r.status_code != 200:
@@ -200,7 +203,7 @@ async def db_get_user_niche(tg_id: int) -> str | None:
 
 
 async def send_owner_report(period: str = "day"):
-    if not OWNER_ID or not DB_POOL:
+    if not OWNER_ID or not DB_POOL or tg_app is None:
         return
 
     interval = "1 day" if period == "day" else "7 days"
@@ -225,7 +228,10 @@ async def send_owner_report(period: str = "day"):
             f"#{r['id']} [{r['source']}] {dt} | {r['name_from_form'] or '-'} | {r['niche_from_form'] or '-'} | {r['contact_from_form'] or '-'}"
         )
 
-    await tg_app.bot.send_message(chat_id=int(OWNER_ID), text="\n".join(lines))
+    try:
+        await tg_app.bot.send_message(chat_id=int(OWNER_ID), text="\n".join(lines))
+    except Exception as e:
+        print("send_owner_report failed:", e)
 
 
 # ============================================================
@@ -249,69 +255,71 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lead_id = int(lead_id_str)
 
             async with DB_POOL.acquire() as conn:
-                # ВАЖНО: берём и имя, и нишу из формы
                 lead = await conn.fetchrow(
                     "SELECT id, name_from_form, niche_from_form, contact_from_form FROM leads WHERE id=$1",
                     lead_id
                 )
 
-              if lead:
-    name_from_form = (lead["name_from_form"] or "").strip()
-    niche = (lead["niche_from_form"] or "").strip()
-    contact = (lead["contact_from_form"] or "").strip()
+                if lead:
+                    name_from_form = (lead["name_from_form"] or "").strip()
+                    niche = (lead["niche_from_form"] or "").strip()
+                    contact = (lead["contact_from_form"] or "").strip()
 
-    final_name = name_from_form if name_from_form else (user.first_name or "друг")
+                    final_name = name_from_form if name_from_form else (user.first_name or "друг")
 
-    await conn.execute("""
-        INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
-        VALUES ($1, $2, $3, NULLIF($4,''), NULLIF($5,''), now())
-        ON CONFLICT (tg_id) DO UPDATE SET
-          first_name = EXCLUDED.first_name,
-          username = EXCLUDED.username,
-          business_niche = COALESCE(users.business_niche, EXCLUDED.business_niche),
-          contact = COALESCE(users.contact, EXCLUDED.contact),
-          last_seen = now()
-    """, int(user.id), user.first_name or "", user.username or "", niche, contact)
+                    # upsert users
+                    await conn.execute("""
+                        INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
+                        VALUES ($1, $2, $3, NULLIF($4,''), NULLIF($5,''), now())
+                        ON CONFLICT (tg_id) DO UPDATE SET
+                          first_name = EXCLUDED.first_name,
+                          username = EXCLUDED.username,
+                          business_niche = COALESCE(users.business_niche, EXCLUDED.business_niche),
+                          contact = COALESCE(users.contact, EXCLUDED.contact),
+                          last_seen = now()
+                    """, int(user.id), user.first_name or "", user.username or "", niche, contact)
 
-    await conn.execute("UPDATE leads SET tg_id=$1 WHERE id=$2", int(user.id), lead_id)
+                    # привязываем лид к tg_id
+                    await conn.execute("UPDATE leads SET tg_id=$1 WHERE id=$2", int(user.id), lead_id)
 
-    if OWNER_ID:
-        try:
-            await context.bot.send_message(
-                chat_id=int(OWNER_ID),
-                text=f"✅ Лид подтвержден (Website) #{lead_id}\n👤 {user.first_name} (@{user.username}) id={user.id}"
-            )
-        except:
-            pass
+                    # владельцу
+                    if OWNER_ID:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=int(OWNER_ID),
+                                text=f"✅ Лид подтвержден (Website) #{lead_id}\n👤 {user.first_name} (@{user.username}) id={user.id}"
+                            )
+                        except Exception:
+                            pass
 
-    msg = (
-        f"**Здравствуйте, {final_name}! 👋**\n"
-        f"Меня зовут **Soff**. Спасибо, что оставили заявку — добро пожаловать в ранний доступ ✅\n\n"
-        f"Я — AI-ассистент **AWM OS**. Мы строим единый Telegram-интерфейс для управления **10+ ИИ-агентами**, "
-        f"которые 24/7 помогают бизнесу: от анализа до контента, рекламы и отчётов.\n"
-        f"Это **9 этапов автоматизации**, которые превращают хаос в прибыль и снимают с вас рутину.\n\n"
-        f"Вижу вашу сферу: **{niche or 'не указана'}**.\n"
-        f"Сервис ещё в разработке — завершаем финальную сборку.\n\n"
-        f"Подскажите, пожалуйста, что сейчас приоритетнее: **лиды, контент или реклама?**"
-    )
-    await update.message.reply_text(msg, parse_mode="Markdown")
-    return
+                    msg = (
+                        f"**Здравствуйте, {final_name}! 👋**\n"
+                        f"Меня зовут **Soff**. Спасибо, что оставили заявку — добро пожаловать в ранний доступ ✅\n\n"
+                        f"Я — AI-ассистент **AWM OS**. Мы строим единый Telegram-интерфейс для управления **10+ ИИ-агентами**, "
+                        f"которые 24/7 помогают бизнесу: от анализа до контента, рекламы и отчётов.\n"
+                        f"Это **9 этапов автоматизации**, которые превращают хаос в прибыль и снимают с вас рутину.\n\n"
+                        f"Вижу вашу сферу: **{niche or 'не указана'}**.\n"
+                        f"Сервис ещё в разработке — завершаем финальную сборку.\n\n"
+                        f"Подскажите, пожалуйста, что сейчас приоритетнее: **лиды, контент или реклама?**"
+                    )
 
-else:
-    # ✅ Это поможет понять, почему приходил обычный /start
-    await update.message.reply_text(
-        f"⚠️ Не нашла заявку с сайта по ссылке: lead_{lead_id}.\n"
-        f"Пожалуйста, отправьте форму ещё раз на сайте и нажмите новую кнопку «Перейти в Telegram»."
-    )
-    if OWNER_ID:
-        try:
-            await context.bot.send_message(
-                chat_id=int(OWNER_ID),
-                text=f"⚠️ Website lead not found: lead_{lead_id} (user {user.id} @{user.username})"
-            )
-        except:
-            pass
-    return
+                    await update.message.reply_text(msg, parse_mode="Markdown")
+                    return
+
+                # lead НЕ найден
+                await update.message.reply_text(
+                    f"⚠️ Не нашла заявку с сайта по ссылке: lead_{lead_id}.\n"
+                    f"Пожалуйста, отправьте форму ещё раз на сайте и нажмите новую кнопку «Перейти в Telegram»."
+                )
+                if OWNER_ID:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=int(OWNER_ID),
+                            text=f"⚠️ Website lead not found: lead_{lead_id} (user {user.id} @{user.username})"
+                        )
+                    except Exception:
+                        pass
+                return
 
     # ---------- (B) Обычный /start ----------
     await update.message.reply_text(WELCOME_TEXT)
@@ -346,7 +354,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-    except:
+    except Exception:
         pass
 
     name = _extract_name(text)
@@ -378,10 +386,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["history"] = history
 
         if OWNER_ID and str(user.id) != str(OWNER_ID):
-            await context.bot.send_message(
-                chat_id=int(OWNER_ID),
-                text=f"📈 Сообщение от лида!\n👤 {user.first_name} (@{user.username})\n💬 {text}"
-            )
+            try:
+                await context.bot.send_message(
+                    chat_id=int(OWNER_ID),
+                    text=f"📈 Сообщение от лида!\n👤 {user.first_name} (@{user.username})\n💬 {text}"
+                )
+            except Exception as e:
+                # если владелец заблокировал бота/ошибка телеги — не падаем
+                print("send_message to owner failed:", e)
 
     except Exception as e:
         err = str(e)
@@ -396,7 +408,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if OWNER_ID:
             try:
                 await context.bot.send_message(chat_id=int(OWNER_ID), text=f"❌ Gemini error:\n{err}")
-            except:
+            except Exception:
                 pass
 
         await update.message.reply_text("⚠️ Ошибка. Попробуйте ещё раз через минуту.")
@@ -413,7 +425,7 @@ async def webhook_handler(request: web.Request) -> web.Response:
     global tg_app
     try:
         data = await request.json()
-    except:
+    except Exception:
         return web.Response(status=400, text="bad json")
 
     if tg_app is None:
@@ -427,7 +439,7 @@ async def webhook_handler(request: web.Request) -> web.Response:
 async def api_leads_miniapp(request: web.Request) -> web.Response:
     try:
         body = await request.json()
-    except:
+    except Exception:
         return web.json_response({"ok": False, "error": "Bad JSON"}, status=400)
 
     init_data = body.get("initData") or ""
@@ -443,7 +455,7 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     first_name = user.get("first_name") or ""
     username = user.get("username") or ""
 
-    if not tg_id or not DB_POOL:
+    if not tg_id or not DB_POOL or tg_app is None:
         return web.json_response({"ok": False, "error": "No tg_id or DB not ready"}, status=400)
 
     name = (form.get("name") or "").strip()
@@ -469,26 +481,32 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
         """, int(tg_id), name, niche, contact, json.dumps(form))
 
     greet_name = first_name or name or "друг"
-    await tg_app.bot.send_message(
-        chat_id=int(tg_id),
-        text=(
-            f"Привет, {greet_name}! 👋\n"
-            f"Спасибо, я записала {niche or 'вашу нишу'}.\n"
-            f"Опиши задачу в 1 фразе — помогу."
-        )
-    )
-
-    if OWNER_ID:
+    try:
         await tg_app.bot.send_message(
-            chat_id=int(OWNER_ID),
+            chat_id=int(tg_id),
             text=(
-                f"📩 Новый лид (Mini App) #{lead_id}\n"
-                f"👤 {first_name} (@{username}) | id={tg_id}\n"
-                f"🧩 Ниша: {niche or '-'}\n"
-                f"☎️ Контакт: {contact or '-'}\n"
-                f"📝 Имя из формы: {name or '-'}"
+                f"Привет, {greet_name}! 👋\n"
+                f"Спасибо, я записала {niche or 'вашу нишу'}.\n"
+                f"Опиши задачу в 1 фразе — помогу."
             )
         )
+    except Exception as e:
+        print("send_message to user failed:", e)
+
+    if OWNER_ID:
+        try:
+            await tg_app.bot.send_message(
+                chat_id=int(OWNER_ID),
+                text=(
+                    f"📩 Новый лид (Mini App) #{lead_id}\n"
+                    f"👤 {first_name} (@{username}) | id={tg_id}\n"
+                    f"🧩 Ниша: {niche or '-'}\n"
+                    f"☎️ Контакт: {contact or '-'}\n"
+                    f"📝 Имя из формы: {name or '-'}"
+                )
+            )
+        except Exception as e:
+            print("send_message to owner failed:", e)
 
     return web.json_response({"ok": True, "leadId": lead_id})
 
@@ -499,7 +517,7 @@ async def api_leads_website(request: web.Request) -> web.Response:
 
     try:
         body = await request.json()
-    except:
+    except Exception:
         return web.json_response({"ok": False, "error": "Bad JSON"}, status=400)
 
     name = (body.get("name") or "").strip()
@@ -507,7 +525,7 @@ async def api_leads_website(request: web.Request) -> web.Response:
     contact = (body.get("contact") or "").strip()
     tg = (body.get("tg") or "").strip()
 
-    if not DB_POOL:
+    if not DB_POOL or tg_app is None:
         return web.json_response({"ok": False, "error": "DB not ready"}, status=500)
     if not BOT_USERNAME:
         return web.json_response({"ok": False, "error": "Missing BOT_USERNAME"}, status=500)
@@ -524,17 +542,20 @@ async def api_leads_website(request: web.Request) -> web.Response:
     deeplink = f"https://t.me/{BOT_USERNAME}?start=lead_{lead_id}"
 
     if OWNER_ID:
-        await tg_app.bot.send_message(
-            chat_id=int(OWNER_ID),
-            text=(
-                f"🌐 Новый лид (Website) #{lead_id}\n"
-                f"📝 Имя: {name or '-'}\n"
-                f"🧩 Ниша: {niche or '-'}\n"
-                f"📎 TG/Контакт: {tg or contact or '-'}\n"
-                f"🔗 Deep-link: {deeplink}\n"
-                f"ℹ️ Подтвердится, когда человек нажмёт ссылку."
+        try:
+            await tg_app.bot.send_message(
+                chat_id=int(OWNER_ID),
+                text=(
+                    f"🌐 Новый лид (Website) #{lead_id}\n"
+                    f"📝 Имя: {name or '-'}\n"
+                    f"🧩 Ниша: {niche or '-'}\n"
+                    f"📎 TG/Контакт: {tg or contact or '-'}\n"
+                    f"🔗 Deep-link: {deeplink}\n"
+                    f"ℹ️ Подтвердится, когда человек нажмёт ссылку."
+                )
             )
-        )
+        except Exception as e:
+            print("send_message to owner failed:", e)
 
     return web.json_response({"ok": True, "leadId": lead_id, "deeplink": deeplink})
 
