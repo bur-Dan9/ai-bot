@@ -1,0 +1,16 @@
+name: Daily Report Ping
+
+on:
+  schedule:
+    # каждый день в 18:00 UTC = 22:00 Тбилиси (UTC+4)
+    - cron: "0 18 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call daily report endpoint
+        run: |
+          curl -sS -X GET "${{ secrets.RENDER_REPORT_URL }}" \
+            -H "X-Task-Token: ${{ secrets.REPORT_TASK_TOKEN }}"
