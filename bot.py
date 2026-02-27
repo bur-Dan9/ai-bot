@@ -14,8 +14,7 @@ import asyncpg
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-
-print("### BUILD: SUPABASE + MINIAPP + WEBSITE + AUTO_REPORT ###", flush=True)
+print("### BUILD: WEBSITE_GREETING_V2 ###", flush=True)
 
 # ============================================================
 # ✅ ENV (Render -> Environment)
