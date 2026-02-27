@@ -255,52 +255,63 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lead_id
                 )
 
-                if lead:
-                    name_from_form = (lead["name_from_form"] or "").strip()
-                    niche = (lead["niche_from_form"] or "").strip()
-                    contact = (lead["contact_from_form"] or "").strip()
+              if lead:
+    name_from_form = (lead["name_from_form"] or "").strip()
+    niche = (lead["niche_from_form"] or "").strip()
+    contact = (lead["contact_from_form"] or "").strip()
 
-                    final_name = name_from_form if name_from_form else (user.first_name or "друг")
+    final_name = name_from_form if name_from_form else (user.first_name or "друг")
 
-                    # upsert users (сохраняем нишу/контакт)
-                    await conn.execute("""
-                        INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
-                        VALUES ($1, $2, $3, NULLIF($4,''), NULLIF($5,''), now())
-                        ON CONFLICT (tg_id) DO UPDATE SET
-                          first_name = EXCLUDED.first_name,
-                          username = EXCLUDED.username,
-                          business_niche = COALESCE(users.business_niche, EXCLUDED.business_niche),
-                          contact = COALESCE(users.contact, EXCLUDED.contact),
-                          last_seen = now()
-                    """, int(user.id), user.first_name or "", user.username or "", niche, contact)
+    await conn.execute("""
+        INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
+        VALUES ($1, $2, $3, NULLIF($4,''), NULLIF($5,''), now())
+        ON CONFLICT (tg_id) DO UPDATE SET
+          first_name = EXCLUDED.first_name,
+          username = EXCLUDED.username,
+          business_niche = COALESCE(users.business_niche, EXCLUDED.business_niche),
+          contact = COALESCE(users.contact, EXCLUDED.contact),
+          last_seen = now()
+    """, int(user.id), user.first_name or "", user.username or "", niche, contact)
 
-                    # привязываем лид к tg_id
-                    await conn.execute("UPDATE leads SET tg_id=$1 WHERE id=$2", int(user.id), lead_id)
+    await conn.execute("UPDATE leads SET tg_id=$1 WHERE id=$2", int(user.id), lead_id)
 
-                    # владельцу
-                    if OWNER_ID:
-                        try:
-                            await context.bot.send_message(
-                                chat_id=int(OWNER_ID),
-                                text=f"✅ Лид подтвержден (Website) #{lead_id}\n👤 {user.first_name} (@{user.username}) id={user.id}"
-                            )
-                        except:
-                            pass
+    if OWNER_ID:
+        try:
+            await context.bot.send_message(
+                chat_id=int(OWNER_ID),
+                text=f"✅ Лид подтвержден (Website) #{lead_id}\n👤 {user.first_name} (@{user.username}) id={user.id}"
+            )
+        except:
+            pass
 
-                    # ✅ НОВОЕ ПРИВЕТСТВИЕ (как ты просил)
-                    msg = (
-                        f"**Здравствуйте, {final_name}! 👋**\n"
-                        f"Меня зовут **Soff**. Спасибо, что оставили заявку — добро пожаловать в ранний доступ ✅\n\n"
-                        f"Я — AI-ассистент **AWM OS**. Мы строим единый Telegram-интерфейс для управления **10+ ИИ-агентами**, "
-                        f"которые 24/7 помогают бизнесу: от анализа до контента, рекламы и отчётов.\n"
-                        f"Это **9 этапов автоматизации**, которые превращают хаос в прибыль и снимают с вас рутину.\n\n"
-                        f"Вижу вашу сферу: **{niche or 'не указана'}**.\n"
-                        f"Сервис ещё в разработке — завершаем финальную сборку.\n\n"
-                        f"Подскажите, пожалуйста, что сейчас приоритетнее: **лиды, контент или реклама?**"
-                    )
+    msg = (
+        f"**Здравствуйте, {final_name}! 👋**\n"
+        f"Меня зовут **Soff**. Спасибо, что оставили заявку — добро пожаловать в ранний доступ ✅\n\n"
+        f"Я — AI-ассистент **AWM OS**. Мы строим единый Telegram-интерфейс для управления **10+ ИИ-агентами**, "
+        f"которые 24/7 помогают бизнесу: от анализа до контента, рекламы и отчётов.\n"
+        f"Это **9 этапов автоматизации**, которые превращают хаос в прибыль и снимают с вас рутину.\n\n"
+        f"Вижу вашу сферу: **{niche or 'не указана'}**.\n"
+        f"Сервис ещё в разработке — завершаем финальную сборку.\n\n"
+        f"Подскажите, пожалуйста, что сейчас приоритетнее: **лиды, контент или реклама?**"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+    return
 
-                    await update.message.reply_text(msg, parse_mode="Markdown")
-                    return
+else:
+    # ✅ Это поможет понять, почему приходил обычный /start
+    await update.message.reply_text(
+        f"⚠️ Не нашла заявку с сайта по ссылке: lead_{lead_id}.\n"
+        f"Пожалуйста, отправьте форму ещё раз на сайте и нажмите новую кнопку «Перейти в Telegram»."
+    )
+    if OWNER_ID:
+        try:
+            await context.bot.send_message(
+                chat_id=int(OWNER_ID),
+                text=f"⚠️ Website lead not found: lead_{lead_id} (user {user.id} @{user.username})"
+            )
+        except:
+            pass
+    return
 
     # ---------- (B) Обычный /start ----------
     await update.message.reply_text(WELCOME_TEXT)
