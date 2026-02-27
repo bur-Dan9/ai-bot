@@ -10,7 +10,7 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 OWNER_ID = os.environ.get("OWNER_ID")
 
-MODEL = "gemini-2.0-flash"
+MODEL = "gemini-2.5-flash"
 
 SYSTEM_PROMPT = (
     "Ты — Soffi, лицо AI-агентства 'awm os'.\n"
