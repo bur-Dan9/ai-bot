@@ -15,18 +15,40 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-print("### SUPABASE BUILD ACTIVE ###", flush=True)
+print("### BUILD: SUPABASE + MINIAPP + WEBSITE + AUTO_REPORT ###", flush=True)
 
-# ===== ENV =====
+# ============================================================
+# ✅ ENV (Render -> Environment)
+# ============================================================
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 OWNER_ID = os.environ.get("OWNER_ID")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-BASE_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://ai-bot-a3aj.onrender.com").rstrip("/")
-ALLOWED_ORIGINS = {"https://min-iapp.vercel.app"}
+# (1) ОБЯЗАТЕЛЬНО ДОБАВЬ НА RENDER:
+# BOT_USERNAME = username бота без "@", например: soffi_awm_os_bot
+BOT_USERNAME = os.environ.get("BOT_USERNAME")
 
-# ===== GEMINI =====
+# (2) ОБЯЗАТЕЛЬНО ДОБАВЬ НА RENDER:
+# REPORT_TASK_TOKEN = длинный секрет для защиты /tasks/daily_report
+REPORT_TASK_TOKEN = os.environ.get("REPORT_TASK_TOKEN")
+
+# Render URL
+BASE_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://ai-bot-a3aj.onrender.com").rstrip("/")
+
+# ============================================================
+# ✅ CORS: какие домены могут дергать API
+# ============================================================
+# ВСТАВЬ СЮДА ДОМЕН САЙТА, когда появится:
+# Пример: "https://my-site.com"
+ALLOWED_ORIGINS = {
+    "https://min-iapp.vercel.app",
+    "https://awm-os.vercel.app",
+}
+
+# ============================================================
+# ✅ GEMINI
+# ============================================================
 MODEL = "gemini-2.5-flash"
 
 SYSTEM_PROMPT = (
@@ -45,6 +67,9 @@ WELCOME_TEXT = (
     "Для начала: чем занимаетесь и в какой нише/городе?"
 )
 
+# ============================================================
+# ✅ LIMITS / MEMORY
+# ============================================================
 MAX_TURNS = 12
 
 MAX_REQUESTS_PER_DAY = 200
@@ -54,6 +79,9 @@ tg_app: Application | None = None
 DB_POOL: asyncpg.Pool | None = None
 
 
+# ============================================================
+# ✅ CORS middleware
+# ============================================================
 @web.middleware
 async def cors_middleware(request, handler):
     if request.method == "OPTIONS":
@@ -65,11 +93,14 @@ async def cors_middleware(request, handler):
     if origin in ALLOWED_ORIGINS:
         resp.headers["Access-Control-Allow-Origin"] = origin
         resp.headers["Vary"] = "Origin"
-        resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS, GET"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Task-Token"
     return resp
 
 
+# ============================================================
+# ✅ Helpers
+# ============================================================
 def _extract_name(text: str) -> str | None:
     t = text.strip()
     patterns = [
@@ -174,22 +205,14 @@ async def db_get_user_niche(tg_id: int) -> str | None:
         return await conn.fetchval("SELECT business_niche FROM users WHERE tg_id=$1", tg_id)
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["introduced"] = True
-    context.user_data["history"] = []
-    await update.message.reply_text(WELCOME_TEXT)
-
-
-async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not OWNER_ID or str(update.effective_user.id) != str(OWNER_ID):
+async def send_owner_report(period: str = "day"):
+    """
+    ✅ Используется и для /report, и для авто-репорта.
+    """
+    if not OWNER_ID or not DB_POOL:
         return
 
-    period = (context.args[0] if context.args else "day").lower()
     interval = "1 day" if period == "day" else "7 days"
-
-    if not DB_POOL:
-        await update.message.reply_text("DB not ready")
-        return
 
     async with DB_POOL.acquire() as conn:
         total = await conn.fetchval(f"""
@@ -210,7 +233,91 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(
             f"#{r['id']} [{r['source']}] {dt} | {r['name_from_form'] or '-'} | {r['niche_from_form'] or '-'} | {r['contact_from_form'] or '-'}"
         )
-    await update.message.reply_text("\n".join(lines))
+
+    await tg_app.bot.send_message(chat_id=int(OWNER_ID), text="\n".join(lines))
+
+
+# ============================================================
+# ✅ Telegram handlers
+# ============================================================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    ✅ /start
+    ✅ /start lead_123  (подтверждение лидов с сайта)
+    """
+    context.user_data["introduced"] = True
+    context.user_data["history"] = []
+
+    user = update.effective_user
+    args = context.args or []
+
+    # ---------- (A) Подтверждение лида с сайта ----------
+    if args and args[0].startswith("lead_") and DB_POOL:
+        lead_id_str = args[0].split("lead_", 1)[1]
+        if lead_id_str.isdigit():
+            lead_id = int(lead_id_str)
+
+            async with DB_POOL.acquire() as conn:
+                lead = await conn.fetchrow(
+                    "SELECT id, niche_from_form, contact_from_form FROM leads WHERE id=$1",
+                    lead_id
+                )
+
+                if lead:
+                    niche = lead["niche_from_form"] or ""
+                    contact = lead["contact_from_form"] or ""
+
+                    # upsert users
+                    await conn.execute("""
+                        INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
+                        VALUES ($1, $2, $3, NULLIF($4,''), NULLIF($5,''), now())
+                        ON CONFLICT (tg_id) DO UPDATE SET
+                          first_name = EXCLUDED.first_name,
+                          username = EXCLUDED.username,
+                          business_niche = COALESCE(users.business_niche, EXCLUDED.business_niche),
+                          contact = COALESCE(users.contact, EXCLUDED.contact),
+                          last_seen = now()
+                    """, int(user.id), user.first_name or "", user.username or "", niche, contact)
+
+                    # привязываем лид к tg_id
+                    await conn.execute("UPDATE leads SET tg_id=$1 WHERE id=$2", int(user.id), lead_id)
+
+                    # владельцу
+                    if OWNER_ID:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=int(OWNER_ID),
+                                text=f"✅ Лид подтвержден (Website) #{lead_id}\n👤 {user.first_name} (@{user.username}) id={user.id}"
+                            )
+                        except:
+                            pass
+
+                    # пользователю
+                    await update.message.reply_text(
+                        f"Привет, {user.first_name}! 👋\n"
+                        f"Спасибо! Я вижу вашу заявку с сайта.\n"
+                        f"Напишите задачу в 1–2 фразах — помогу."
+                    )
+                    return
+
+    # ---------- (B) Обычный /start ----------
+    await update.message.reply_text(WELCOME_TEXT)
+
+
+async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    ✅ /report day
+    ✅ /report week
+    Только для OWNER_ID
+    """
+    if not OWNER_ID or str(update.effective_user.id) != str(OWNER_ID):
+        return
+
+    period = (context.args[0] if context.args else "day").lower()
+    if period not in ("day", "week"):
+        period = "day"
+
+    await send_owner_report(period)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -263,8 +370,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["history"] = history
 
         if OWNER_ID and str(user.id) != str(OWNER_ID):
-            report_msg = f"📈 Сообщение от лида!\n👤 {user.first_name} (@{user.username})\n💬 {text}"
-            await context.bot.send_message(chat_id=int(OWNER_ID), text=report_msg)
+            await context.bot.send_message(
+                chat_id=int(OWNER_ID),
+                text=f"📈 Сообщение от лида!\n👤 {user.first_name} (@{user.username})\n💬 {text}"
+            )
 
     except Exception as e:
         err = str(e)
@@ -285,6 +394,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Ошибка. Попробуйте ещё раз через минуту.")
 
 
+# ============================================================
+# ✅ HTTP endpoints
+# ============================================================
 async def health(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
@@ -305,6 +417,10 @@ async def webhook_handler(request: web.Request) -> web.Response:
 
 
 async def api_leads_miniapp(request: web.Request) -> web.Response:
+    """
+    ✅ POST /api/leads/miniapp
+    body: { initData: string, form: {name,niche,contact} }
+    """
     try:
         body = await request.json()
     except:
@@ -323,15 +439,12 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     first_name = user.get("first_name") or ""
     username = user.get("username") or ""
 
-    if not tg_id:
-        return web.json_response({"ok": False, "error": "No tg_id"}, status=400)
+    if not tg_id or not DB_POOL:
+        return web.json_response({"ok": False, "error": "No tg_id or DB not ready"}, status=400)
 
     name = (form.get("name") or "").strip()
     niche = (form.get("niche") or "").strip()
     contact = (form.get("contact") or "").strip()
-
-    if not DB_POOL:
-        return web.json_response({"ok": False, "error": "DB not ready"}, status=500)
 
     async with DB_POOL.acquire() as conn:
         await conn.execute("""
@@ -351,34 +464,105 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
             RETURNING id
         """, int(tg_id), name, niche, contact, json.dumps(form))
 
+    # пользователю
     greet_name = first_name or name or "друг"
-    niche_txt = niche or "вашу нишу"
-    text_user = (
-        f"Привет, {greet_name}! 👋\n"
-        f"Спасибо, я записала {niche_txt}.\n"
-        f"Можешь в 1 фразе описать задачу — и я подскажу, чем помочь."
-    )
-    try:
-        await tg_app.bot.send_message(chat_id=int(tg_id), text=text_user)
-    except Exception as e:
-        print("send_message to user failed:", e)
-
-    if OWNER_ID:
-        owner_text = (
-            f"📩 Новый лид (Mini App) #{lead_id}\n"
-            f"👤 {first_name} (@{username}) | id={tg_id}\n"
-            f"🧩 Ниша: {niche or '-'}\n"
-            f"☎️ Контакт: {contact or '-'}\n"
-            f"📝 Имя из формы: {name or '-'}"
+    await tg_app.bot.send_message(
+        chat_id=int(tg_id),
+        text=(
+            f"Привет, {greet_name}! 👋\n"
+            f"Спасибо, я записала {niche or 'вашу нишу'}.\n"
+            f"Опиши задачу в 1 фразе — помогу."
         )
-        try:
-            await tg_app.bot.send_message(chat_id=int(OWNER_ID), text=owner_text)
-        except Exception as e:
-            print("send_message to owner failed:", e)
+    )
+
+    # владельцу
+    if OWNER_ID:
+        await tg_app.bot.send_message(
+            chat_id=int(OWNER_ID),
+            text=(
+                f"📩 Новый лид (Mini App) #{lead_id}\n"
+                f"👤 {first_name} (@{username}) | id={tg_id}\n"
+                f"🧩 Ниша: {niche or '-'}\n"
+                f"☎️ Контакт: {contact or '-'}\n"
+                f"📝 Имя из формы: {name or '-'}"
+            )
+        )
 
     return web.json_response({"ok": True, "leadId": lead_id})
 
 
+async def api_leads_website(request: web.Request) -> web.Response:
+    """
+    ✅ POST /api/leads/website
+    body: { name, niche, contact, tg }
+    Возвращает deeplink на бота: https://t.me/<BOT_USERNAME>?start=lead_<id>
+    """
+    if request.method == "OPTIONS":
+        return web.Response(status=204)
+
+    try:
+        body = await request.json()
+    except:
+        return web.json_response({"ok": False, "error": "Bad JSON"}, status=400)
+
+    name = (body.get("name") or "").strip()
+    niche = (body.get("niche") or "").strip()
+    contact = (body.get("contact") or "").strip()
+    tg = (body.get("tg") or "").strip()
+
+    if not DB_POOL:
+        return web.json_response({"ok": False, "error": "DB not ready"}, status=500)
+    if not BOT_USERNAME:
+        return web.json_response({"ok": False, "error": "Missing BOT_USERNAME"}, status=500)
+
+    payload = {"name": name, "niche": niche, "contact": contact, "tg": tg}
+
+    async with DB_POOL.acquire() as conn:
+        lead_id = await conn.fetchval("""
+            INSERT INTO leads (tg_id, source, name_from_form, niche_from_form, contact_from_form, payload)
+            VALUES (NULL, 'website', NULLIF($1,''), NULLIF($2,''), NULLIF($3,''), $4)
+            RETURNING id
+        """, name, niche, tg or contact, json.dumps(payload))
+
+    deeplink = f"https://t.me/{BOT_USERNAME}?start=lead_{lead_id}"
+
+    # владельцу: сайт-лид не подтверждён
+    if OWNER_ID:
+        await tg_app.bot.send_message(
+            chat_id=int(OWNER_ID),
+            text=(
+                f"🌐 Новый лид (Website) #{lead_id}\n"
+                f"📝 Имя: {name or '-'}\n"
+                f"🧩 Ниша: {niche or '-'}\n"
+                f"📎 TG/Контакт: {tg or contact or '-'}\n"
+                f"🔗 Deep-link: {deeplink}\n"
+                f"ℹ️ Подтвердится, когда человек нажмёт ссылку."
+            )
+        )
+
+    return web.json_response({"ok": True, "leadId": lead_id, "deeplink": deeplink})
+
+
+async def tasks_daily_report(request: web.Request) -> web.Response:
+    """
+    ✅ GET /tasks/daily_report
+    Защита токеном: header X-Task-Token: REPORT_TASK_TOKEN
+    (Используем в GitHub Actions)
+    """
+    token = request.headers.get("X-Task-Token") or request.query.get("token")
+    if not REPORT_TASK_TOKEN or token != REPORT_TASK_TOKEN:
+        return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+
+    try:
+        await send_owner_report("day")
+        return web.json_response({"ok": True})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+# ============================================================
+# ✅ MAIN (webhook + api)
+# ============================================================
 async def main_async():
     global tg_app, DB_POOL
 
@@ -403,12 +587,22 @@ async def main_async():
     port = int(os.environ.get("PORT", "10000"))
     web_app = web.Application(middlewares=[cors_middleware])
 
+    # health
     web_app.router.add_get("/", health)
     web_app.router.add_get("/health", health)
 
+    # telegram webhook
     web_app.router.add_post("/webhook", webhook_handler)
+
+    # api miniapp + website
     web_app.router.add_post("/api/leads/miniapp", api_leads_miniapp)
     web_app.router.add_options("/api/leads/miniapp", api_leads_miniapp)
+
+    web_app.router.add_post("/api/leads/website", api_leads_website)
+    web_app.router.add_options("/api/leads/website", api_leads_website)
+
+    # tasks
+    web_app.router.add_get("/tasks/daily_report", tasks_daily_report)
 
     runner = web.AppRunner(web_app)
     await runner.setup()
@@ -422,7 +616,8 @@ async def main_async():
 
     print(f"✅ Bot started (WEBHOOK) on {webhook_url}, set_webhook={ok}", flush=True)
     print(f"✅ WebhookInfo: url={info.url} pending={info.pending_update_count} last_error={info.last_error_message}", flush=True)
-    print("✅ API ready: POST /api/leads/miniapp", flush=True)
+    print("✅ API ready: /api/leads/miniapp  +  /api/leads/website", flush=True)
+    print("✅ Task ready: GET /tasks/daily_report", flush=True)
     print("✅ Reports: /report day | /report week", flush=True)
 
     await asyncio.Event().wait()
