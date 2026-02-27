@@ -9,21 +9,21 @@ from datetime import datetime, timezone
 from urllib.parse import parse_qsl
 from aiohttp import web
 
+import asyncpg
+
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-print("### WEBHOOK BUILD ACTIVE ###", flush=True)
+print("### SUPABASE BUILD ACTIVE ###", flush=True)
 
 # ===== ENV =====
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 OWNER_ID = os.environ.get("OWNER_ID")
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# твой Render URL
 BASE_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://ai-bot-a3aj.onrender.com").rstrip("/")
-
-# разрешаем запросы только с Vercel миниаппа
 ALLOWED_ORIGINS = {"https://min-iapp.vercel.app"}
 
 # ===== GEMINI =====
@@ -45,24 +45,17 @@ WELCOME_TEXT = (
     "Для начала: чем занимаетесь и в какой нише/городе?"
 )
 
-# ===== MEMORY =====
 MAX_TURNS = 12
 
-# ===== GLOBAL LIMIT =====
 MAX_REQUESTS_PER_DAY = 200
 GLOBAL_LIMIT = {"date": None, "count": 0, "blocked_date": None}
 
-# ===== "БЕСПЛАТНАЯ БД" (in-memory) =====
-LEADS = {}         # lead_id -> dict
-USER_PROFILE = {}  # tg_id -> dict
-LEAD_SEQ = 0
-
 tg_app: Application | None = None
+DB_POOL: asyncpg.Pool | None = None
 
 
 @web.middleware
 async def cors_middleware(request, handler):
-    # OPTIONS preflight
     if request.method == "OPTIONS":
         resp = web.Response(status=204)
     else:
@@ -143,9 +136,6 @@ def _check_and_update_global_limit() -> tuple[bool, str | None]:
 
 
 def verify_telegram_webapp_init_data(init_data: str, bot_token: str) -> dict:
-    """
-    Проверка подписи Telegram WebApp initData.
-    """
     if not init_data:
         raise ValueError("Missing initData")
 
@@ -177,10 +167,50 @@ def verify_telegram_webapp_init_data(init_data: str, bot_token: str) -> dict:
     return data
 
 
+async def db_get_user_niche(tg_id: int) -> str | None:
+    if not DB_POOL:
+        return None
+    async with DB_POOL.acquire() as conn:
+        return await conn.fetchval("SELECT business_niche FROM users WHERE tg_id=$1", tg_id)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["introduced"] = True
     context.user_data["history"] = []
     await update.message.reply_text(WELCOME_TEXT)
+
+
+async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not OWNER_ID or str(update.effective_user.id) != str(OWNER_ID):
+        return
+
+    period = (context.args[0] if context.args else "day").lower()
+    interval = "1 day" if period == "day" else "7 days"
+
+    if not DB_POOL:
+        await update.message.reply_text("DB not ready")
+        return
+
+    async with DB_POOL.acquire() as conn:
+        total = await conn.fetchval(f"""
+            SELECT count(*) FROM leads
+            WHERE created_at >= now() - interval '{interval}'
+        """)
+        rows = await conn.fetch(f"""
+            SELECT id, source, created_at, name_from_form, niche_from_form, contact_from_form
+            FROM leads
+            WHERE created_at >= now() - interval '{interval}'
+            ORDER BY created_at DESC
+            LIMIT 30
+        """)
+
+    lines = [f"📊 Отчёт за {period}: всего лидов = {total}\n"]
+    for r in rows:
+        dt = r["created_at"].astimezone(timezone.utc).strftime("%d.%m %H:%M UTC")
+        lines.append(
+            f"#{r['id']} [{r['source']}] {dt} | {r['name_from_form'] or '-'} | {r['niche_from_form'] or '-'} | {r['contact_from_form'] or '-'}"
+        )
+    await update.message.reply_text("\n".join(lines))
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -204,13 +234,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    # персонализация из "памяти" (миниапп)
-    profile = USER_PROFILE.get(int(user.id))
-    niche = profile.get("niche") if profile else None
-
     name = _extract_name(text)
     if name:
         context.user_data["user_name"] = name
+
+    niche = await db_get_user_niche(int(user.id))
 
     history = context.user_data.get("history", [])
     user_name = context.user_data.get("user_name")
@@ -235,8 +263,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["history"] = history
 
         if OWNER_ID and str(user.id) != str(OWNER_ID):
-            report = f"📈 Сообщение от лида!\n👤 {user.first_name} (@{user.username})\n💬 {text}"
-            await context.bot.send_message(chat_id=int(OWNER_ID), text=report)
+            report_msg = f"📈 Сообщение от лида!\n👤 {user.first_name} (@{user.username})\n💬 {text}"
+            await context.bot.send_message(chat_id=int(OWNER_ID), text=report_msg)
 
     except Exception as e:
         err = str(e)
@@ -277,12 +305,6 @@ async def webhook_handler(request: web.Request) -> web.Response:
 
 
 async def api_leads_miniapp(request: web.Request) -> web.Response:
-    """
-    POST /api/leads/miniapp
-    body: { initData: string, form: {name,niche,contact} }
-    """
-    global LEAD_SEQ
-
     try:
         body = await request.json()
     except:
@@ -308,29 +330,27 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     niche = (form.get("niche") or "").strip()
     contact = (form.get("contact") or "").strip()
 
-    LEAD_SEQ += 1
-    lead_id = LEAD_SEQ
+    if not DB_POOL:
+        return web.json_response({"ok": False, "error": "DB not ready"}, status=500)
 
-    LEADS[lead_id] = {
-        "lead_id": lead_id,
-        "tg_id": int(tg_id),
-        "first_name": first_name,
-        "username": username,
-        "name_from_form": name,
-        "niche": niche,
-        "contact": contact,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "source": "miniapp",
-    }
+    async with DB_POOL.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
+            VALUES ($1, $2, $3, NULLIF($4,''), NULLIF($5,''), now())
+            ON CONFLICT (tg_id) DO UPDATE SET
+              first_name = EXCLUDED.first_name,
+              username = EXCLUDED.username,
+              business_niche = COALESCE(users.business_niche, EXCLUDED.business_niche),
+              contact = COALESCE(users.contact, EXCLUDED.contact),
+              last_seen = now()
+        """, int(tg_id), first_name, username, niche, contact)
 
-    USER_PROFILE[int(tg_id)] = {
-        "niche": niche,
-        "contact": contact,
-        "first_name": first_name,
-        "username": username,
-    }
+        lead_id = await conn.fetchval("""
+            INSERT INTO leads (tg_id, source, name_from_form, niche_from_form, contact_from_form, payload)
+            VALUES ($1, 'miniapp', NULLIF($2,''), NULLIF($3,''), NULLIF($4,''), $5)
+            RETURNING id
+        """, int(tg_id), name, niche, contact, json.dumps(form))
 
-    # 1) сообщение пользователю
     greet_name = first_name or name or "друг"
     niche_txt = niche or "вашу нишу"
     text_user = (
@@ -343,7 +363,6 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     except Exception as e:
         print("send_message to user failed:", e)
 
-    # 2) сообщение владельцу
     if OWNER_ID:
         owner_text = (
             f"📩 Новый лид (Mini App) #{lead_id}\n"
@@ -361,15 +380,21 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
 
 
 async def main_async():
-    global tg_app
+    global tg_app, DB_POOL
 
     if not TOKEN:
         raise RuntimeError("Missing TELEGRAM_TOKEN")
     if not GOOGLE_API_KEY:
         raise RuntimeError("Missing GOOGLE_API_KEY")
+    if not DATABASE_URL:
+        raise RuntimeError("Missing DATABASE_URL")
+
+    DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
+    print("✅ DB pool ready", flush=True)
 
     tg_app = Application.builder().token(TOKEN).build()
     tg_app.add_handler(CommandHandler("start", start))
+    tg_app.add_handler(CommandHandler("report", report))
     tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     await tg_app.initialize()
@@ -378,11 +403,9 @@ async def main_async():
     port = int(os.environ.get("PORT", "10000"))
     web_app = web.Application(middlewares=[cors_middleware])
 
-    # health
     web_app.router.add_get("/", health)
     web_app.router.add_get("/health", health)
 
-    # webhook + api
     web_app.router.add_post("/webhook", webhook_handler)
     web_app.router.add_post("/api/leads/miniapp", api_leads_miniapp)
     web_app.router.add_options("/api/leads/miniapp", api_leads_miniapp)
@@ -400,6 +423,7 @@ async def main_async():
     print(f"✅ Bot started (WEBHOOK) on {webhook_url}, set_webhook={ok}", flush=True)
     print(f"✅ WebhookInfo: url={info.url} pending={info.pending_update_count} last_error={info.last_error_message}", flush=True)
     print("✅ API ready: POST /api/leads/miniapp", flush=True)
+    print("✅ Reports: /report day | /report week", flush=True)
 
     await asyncio.Event().wait()
 
