@@ -10,8 +10,7 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-print("### WEBHOOK BUILD ACTIVE ###")  # <- обязано появиться в Render Logs
-
+print("### WEBHOOK BUILD ACTIVE ###", flush=True)
 # ===== ENV =====
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
