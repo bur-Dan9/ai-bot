@@ -3,7 +3,10 @@ import asyncio
 import re
 import requests
 import json
+import hmac
+import hashlib
 from datetime import datetime, timezone
+from urllib.parse import parse_qsl
 from aiohttp import web
 
 from telegram import Update
@@ -11,6 +14,7 @@ from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 print("### WEBHOOK BUILD ACTIVE ###", flush=True)
+
 # ===== ENV =====
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -18,6 +22,9 @@ OWNER_ID = os.environ.get("OWNER_ID")
 
 # твой Render URL
 BASE_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://ai-bot-a3aj.onrender.com").rstrip("/")
+
+# разрешаем запросы только с Vercel миниаппа
+ALLOWED_ORIGINS = {"https://min-iapp.vercel.app"}
 
 # ===== GEMINI =====
 MODEL = "gemini-2.5-flash"
@@ -45,7 +52,29 @@ MAX_TURNS = 12
 MAX_REQUESTS_PER_DAY = 200
 GLOBAL_LIMIT = {"date": None, "count": 0, "blocked_date": None}
 
+# ===== "БЕСПЛАТНАЯ БД" (in-memory) =====
+LEADS = {}         # lead_id -> dict
+USER_PROFILE = {}  # tg_id -> dict
+LEAD_SEQ = 0
+
 tg_app: Application | None = None
+
+
+@web.middleware
+async def cors_middleware(request, handler):
+    # OPTIONS preflight
+    if request.method == "OPTIONS":
+        resp = web.Response(status=204)
+    else:
+        resp = await handler(request)
+
+    origin = request.headers.get("Origin")
+    if origin in ALLOWED_ORIGINS:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Vary"] = "Origin"
+        resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return resp
 
 
 def _extract_name(text: str) -> str | None:
@@ -93,12 +122,6 @@ def ask_gemini(contents: list[dict]) -> str:
     return parts[0]["text"]
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["introduced"] = True
-    context.user_data["history"] = []
-    await update.message.reply_text(WELCOME_TEXT)
-
-
 def _check_and_update_global_limit() -> tuple[bool, str | None]:
     today = datetime.now(timezone.utc).date()
     today_s = str(today)
@@ -117,6 +140,47 @@ def _check_and_update_global_limit() -> tuple[bool, str | None]:
 
     GLOBAL_LIMIT["count"] += 1
     return True, None
+
+
+def verify_telegram_webapp_init_data(init_data: str, bot_token: str) -> dict:
+    """
+    Проверка подписи Telegram WebApp initData.
+    """
+    if not init_data:
+        raise ValueError("Missing initData")
+
+    data = dict(parse_qsl(init_data, keep_blank_values=True))
+    received_hash = data.pop("hash", None)
+    if not received_hash:
+        raise ValueError("Missing hash")
+
+    check_string = "\n".join([f"{k}={data[k]}" for k in sorted(data.keys())])
+
+    secret_key = hmac.new(
+        key=b"WebAppData",
+        msg=bot_token.encode("utf-8"),
+        digestmod=hashlib.sha256
+    ).digest()
+
+    calculated_hash = hmac.new(
+        key=secret_key,
+        msg=check_string.encode("utf-8"),
+        digestmod=hashlib.sha256
+    ).hexdigest()
+
+    if not hmac.compare_digest(calculated_hash, received_hash):
+        raise ValueError("Invalid initData hash")
+
+    if "user" in data:
+        data["user"] = json.loads(data["user"])
+
+    return data
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["introduced"] = True
+    context.user_data["history"] = []
+    await update.message.reply_text(WELCOME_TEXT)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -140,13 +204,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
+    # персонализация из "памяти" (миниапп)
+    profile = USER_PROFILE.get(int(user.id))
+    niche = profile.get("niche") if profile else None
+
     name = _extract_name(text)
     if name:
         context.user_data["user_name"] = name
 
     history = context.user_data.get("history", [])
     user_name = context.user_data.get("user_name")
-    user_text_for_model = f"(Имя пользователя: {user_name})\n{text}" if user_name else text
+
+    prefix = ""
+    if user_name:
+        prefix += f"(Имя пользователя: {user_name})\n"
+    if niche:
+        prefix += f"(Ниша/род деятельности пользователя: {niche})\n"
+
+    user_text_for_model = prefix + text if prefix else text
 
     history.append({"role": "user", "parts": [{"text": user_text_for_model}]})
     history = history[-(MAX_TURNS * 2):]
@@ -160,7 +235,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["history"] = history
 
         if OWNER_ID and str(user.id) != str(OWNER_ID):
-            report = f"📈 Новый лид!\n👤 {user.first_name} (@{user.username})\n💬 {text}"
+            report = f"📈 Сообщение от лида!\n👤 {user.first_name} (@{user.username})\n💬 {text}"
             await context.bot.send_message(chat_id=int(OWNER_ID), text=report)
 
     except Exception as e:
@@ -201,6 +276,90 @@ async def webhook_handler(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+async def api_leads_miniapp(request: web.Request) -> web.Response:
+    """
+    POST /api/leads/miniapp
+    body: { initData: string, form: {name,niche,contact} }
+    """
+    global LEAD_SEQ
+
+    try:
+        body = await request.json()
+    except:
+        return web.json_response({"ok": False, "error": "Bad JSON"}, status=400)
+
+    init_data = body.get("initData") or ""
+    form = body.get("form") or {}
+
+    try:
+        parsed = verify_telegram_webapp_init_data(init_data, TOKEN)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": f"initData invalid: {e}"}, status=401)
+
+    user = parsed.get("user") or {}
+    tg_id = user.get("id")
+    first_name = user.get("first_name") or ""
+    username = user.get("username") or ""
+
+    if not tg_id:
+        return web.json_response({"ok": False, "error": "No tg_id"}, status=400)
+
+    name = (form.get("name") or "").strip()
+    niche = (form.get("niche") or "").strip()
+    contact = (form.get("contact") or "").strip()
+
+    LEAD_SEQ += 1
+    lead_id = LEAD_SEQ
+
+    LEADS[lead_id] = {
+        "lead_id": lead_id,
+        "tg_id": int(tg_id),
+        "first_name": first_name,
+        "username": username,
+        "name_from_form": name,
+        "niche": niche,
+        "contact": contact,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source": "miniapp",
+    }
+
+    USER_PROFILE[int(tg_id)] = {
+        "niche": niche,
+        "contact": contact,
+        "first_name": first_name,
+        "username": username,
+    }
+
+    # 1) сообщение пользователю
+    greet_name = first_name or name or "друг"
+    niche_txt = niche or "вашу нишу"
+    text_user = (
+        f"Привет, {greet_name}! 👋\n"
+        f"Спасибо, я записала {niche_txt}.\n"
+        f"Можешь в 1 фразе описать задачу — и я подскажу, чем помочь."
+    )
+    try:
+        await tg_app.bot.send_message(chat_id=int(tg_id), text=text_user)
+    except Exception as e:
+        print("send_message to user failed:", e)
+
+    # 2) сообщение владельцу
+    if OWNER_ID:
+        owner_text = (
+            f"📩 Новый лид (Mini App) #{lead_id}\n"
+            f"👤 {first_name} (@{username}) | id={tg_id}\n"
+            f"🧩 Ниша: {niche or '-'}\n"
+            f"☎️ Контакт: {contact or '-'}\n"
+            f"📝 Имя из формы: {name or '-'}"
+        )
+        try:
+            await tg_app.bot.send_message(chat_id=int(OWNER_ID), text=owner_text)
+        except Exception as e:
+            print("send_message to owner failed:", e)
+
+    return web.json_response({"ok": True, "leadId": lead_id})
+
+
 async def main_async():
     global tg_app
 
@@ -217,10 +376,16 @@ async def main_async():
     await tg_app.start()
 
     port = int(os.environ.get("PORT", "10000"))
-    web_app = web.Application()
+    web_app = web.Application(middlewares=[cors_middleware])
+
+    # health
     web_app.router.add_get("/", health)
     web_app.router.add_get("/health", health)
+
+    # webhook + api
     web_app.router.add_post("/webhook", webhook_handler)
+    web_app.router.add_post("/api/leads/miniapp", api_leads_miniapp)
+    web_app.router.add_options("/api/leads/miniapp", api_leads_miniapp)
 
     runner = web.AppRunner(web_app)
     await runner.setup()
@@ -228,14 +393,13 @@ async def main_async():
     await site.start()
 
     webhook_url = f"{BASE_URL}/webhook"
-
-    # ставим webhook (delete на всякий случай)
     await tg_app.bot.delete_webhook(drop_pending_updates=True)
     ok = await tg_app.bot.set_webhook(url=webhook_url)
     info = await tg_app.bot.get_webhook_info()
 
-    print(f"✅ Bot started (WEBHOOK) on {webhook_url}, set_webhook={ok}")
-    print(f"✅ WebhookInfo: url={info.url} pending={info.pending_update_count} last_error={info.last_error_message}")
+    print(f"✅ Bot started (WEBHOOK) on {webhook_url}, set_webhook={ok}", flush=True)
+    print(f"✅ WebhookInfo: url={info.url} pending={info.pending_update_count} last_error={info.last_error_message}", flush=True)
+    print("✅ API ready: POST /api/leads/miniapp", flush=True)
 
     await asyncio.Event().wait()
 
