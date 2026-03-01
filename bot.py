@@ -15,7 +15,7 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-print("### BUILD: WEBSITE_GREETING_V2 ###", flush=True)
+print("### BUILD: MINIAPP_GREETING_V3 ###", flush=True)
 
 # ============================================================
 # ✅ ENV (Render -> Environment)
@@ -265,6 +265,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     niche = (lead["niche_from_form"] or "").strip()
                     contact = (lead["contact_from_form"] or "").strip()
 
+                    # имя в приоритете из формы
                     final_name = name_from_form if name_from_form else (user.first_name or "друг")
 
                     # upsert users
@@ -392,7 +393,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text=f"📈 Сообщение от лида!\n👤 {user.first_name} (@{user.username})\n💬 {text}"
                 )
             except Exception as e:
-                # если владелец заблокировал бота/ошибка телеги — не падаем
                 print("send_message to owner failed:", e)
 
     except Exception as e:
@@ -437,7 +437,7 @@ async def webhook_handler(request: web.Request) -> web.Response:
 
 
 # ============================================================
-# ✅ UPDATED: miniapp leads endpoint (name from form has priority)
+# ✅ Miniapp leads endpoint (FINAL: name from form, fixed greeting text)
 # ============================================================
 async def api_leads_miniapp(request: web.Request) -> web.Response:
     try:
@@ -461,7 +461,6 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     if not tg_id or not DB_POOL or tg_app is None:
         return web.json_response({"ok": False, "error": "No tg_id or DB not ready"}, status=400)
 
-    # данные формы
     name = (form.get("name") or "").strip()
     niche = (form.get("niche") or "").strip()
     contact = (form.get("contact") or "").strip()  # можно оставить пустым (поле убрали)
@@ -484,11 +483,10 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
             RETURNING id
         """, int(tg_id), name, niche, contact, json.dumps(form))
 
-    # ✅ имя приоритетно из формы (НЕ из ника)
-    final_name = name or first_name or "друг"
+    # ✅ строго: имя только из формы (если пусто — "друг"), НЕ тянем ник
+    final_name = name or "друг"
     final_niche = niche or "—"
 
-    # ✅ сообщение пользователю — как просили
     user_msg = (
         f"✅ Спасибо, {final_name}! Заявка принята. Ниша: {final_niche}. "
         f"Я уже отправила вам сообщение в боте. "
@@ -500,7 +498,6 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     except Exception as e:
         print("send_message to user failed:", e)
 
-    # ✅ отчёт owner
     if OWNER_ID:
         try:
             await tg_app.bot.send_message(
@@ -517,7 +514,6 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
             print("send_message to owner failed:", e)
 
     deeplink = f"https://t.me/{BOT_USERNAME}?start=lead_{lead_id}" if BOT_USERNAME else ""
-
     return web.json_response({"ok": True, "leadId": lead_id, "deeplink": deeplink})
 
 
