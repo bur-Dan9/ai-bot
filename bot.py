@@ -15,7 +15,9 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-print("### BUILD: MINIAPP_GREETING_V3 ###", flush=True)
+# IMPORTANT: this must show up in Render logs after deploy
+BUILD_TAG = "MINIAPP_NAME_FROM_FORM_ONLY_V4"
+print(f"### BUILD: {BUILD_TAG} ###", flush=True)
 
 # ============================================================
 # ✅ ENV (Render -> Environment)
@@ -265,8 +267,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     niche = (lead["niche_from_form"] or "").strip()
                     contact = (lead["contact_from_form"] or "").strip()
 
-                    # имя в приоритете из формы
-                    final_name = name_from_form if name_from_form else (user.first_name or "друг")
+                    # ✅ имя строго из формы (если пусто — "друг")
+                    final_name = name_from_form or "друг"
 
                     # upsert users
                     await conn.execute("""
@@ -307,10 +309,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text(msg, parse_mode="Markdown")
                     return
 
-                # lead НЕ найден
                 await update.message.reply_text(
-                    f"⚠️ Не нашла заявку с сайта по ссылке: lead_{lead_id}.\n"
-                    f"Пожалуйста, отправьте форму ещё раз на сайте и нажмите новую кнопку «Перейти в Telegram»."
+                    f"⚠️ Не нашла заявку по ссылке: lead_{lead_id}.\n"
+                    f"Пожалуйста, отправьте форму ещё раз."
                 )
                 if OWNER_ID:
                     try:
@@ -421,6 +422,10 @@ async def health(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+async def version(request: web.Request) -> web.Response:
+    return web.Response(text=f"build={BUILD_TAG}")
+
+
 async def webhook_handler(request: web.Request) -> web.Response:
     global tg_app
     try:
@@ -437,7 +442,7 @@ async def webhook_handler(request: web.Request) -> web.Response:
 
 
 # ============================================================
-# ✅ Miniapp leads endpoint (FINAL: name from form, fixed greeting text)
+# ✅ Miniapp leads endpoint (STRICT: name ONLY from form, never TG)
 # ============================================================
 async def api_leads_miniapp(request: web.Request) -> web.Response:
     try:
@@ -463,7 +468,11 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
 
     name = (form.get("name") or "").strip()
     niche = (form.get("niche") or "").strip()
-    contact = (form.get("contact") or "").strip()  # можно оставить пустым (поле убрали)
+    contact = (form.get("contact") or "").strip()
+
+    # DEBUG (keep for now; remove later if you want)
+    print("### MINIAPP FORM ###", form, flush=True)
+    print("### MINIAPP name=", repr(name), "niche=", repr(niche), "TG first_name=", repr(first_name), "username=", repr(username), flush=True)
 
     async with DB_POOL.acquire() as conn:
         await conn.execute("""
@@ -483,9 +492,14 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
             RETURNING id
         """, int(tg_id), name, niche, contact, json.dumps(form))
 
-    # ✅ строго: имя только из формы (если пусто — "друг"), НЕ тянем ник
-    final_name = name or "друг"
-    final_niche = niche or "—"
+    # ✅ STRICT: ONLY form name, never TG name
+    final_name = name.strip() if name else ""
+    if not final_name:
+        final_name = "друг"
+
+    final_niche = niche.strip() if niche else ""
+    if not final_niche:
+        final_niche = "—"
 
     user_msg = (
         f"✅ Спасибо, {final_name}! Заявка принята. Ниша: {final_niche}. "
@@ -607,6 +621,7 @@ async def main_async():
 
     web_app.router.add_get("/", health)
     web_app.router.add_get("/health", health)
+    web_app.router.add_get("/version", version)
 
     web_app.router.add_post("/webhook", webhook_handler)
 
