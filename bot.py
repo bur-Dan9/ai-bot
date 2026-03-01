@@ -436,6 +436,9 @@ async def webhook_handler(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+# ============================================================
+# ✅ UPDATED: miniapp leads endpoint (name from form has priority)
+# ============================================================
 async def api_leads_miniapp(request: web.Request) -> web.Response:
     try:
         body = await request.json()
@@ -458,9 +461,10 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     if not tg_id or not DB_POOL or tg_app is None:
         return web.json_response({"ok": False, "error": "No tg_id or DB not ready"}, status=400)
 
+    # данные формы
     name = (form.get("name") or "").strip()
     niche = (form.get("niche") or "").strip()
-    contact = (form.get("contact") or "").strip()
+    contact = (form.get("contact") or "").strip()  # можно оставить пустым (поле убрали)
 
     async with DB_POOL.acquire() as conn:
         await conn.execute("""
@@ -480,35 +484,41 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
             RETURNING id
         """, int(tg_id), name, niche, contact, json.dumps(form))
 
-    greet_name = first_name or name or "друг"
+    # ✅ имя приоритетно из формы (НЕ из ника)
+    final_name = name or first_name or "друг"
+    final_niche = niche or "—"
+
+    # ✅ сообщение пользователю — как просили
+    user_msg = (
+        f"✅ Спасибо, {final_name}! Заявка принята. Ниша: {final_niche}. "
+        f"Я уже отправила вам сообщение в боте. "
+        f"Если сообщение не пришло — откройте чат и нажмите Start один раз."
+    )
+
     try:
-        await tg_app.bot.send_message(
-            chat_id=int(tg_id),
-            text=(
-                f"Привет, {greet_name}! 👋\n"
-                f"Спасибо, я записала {niche or 'вашу нишу'}.\n"
-                f"Опиши задачу в 1 фразе — помогу."
-            )
-        )
+        await tg_app.bot.send_message(chat_id=int(tg_id), text=user_msg)
     except Exception as e:
         print("send_message to user failed:", e)
 
+    # ✅ отчёт owner
     if OWNER_ID:
         try:
             await tg_app.bot.send_message(
                 chat_id=int(OWNER_ID),
                 text=(
                     f"📩 Новый лид (Mini App) #{lead_id}\n"
-                    f"👤 {first_name} (@{username}) | id={tg_id}\n"
-                    f"🧩 Ниша: {niche or '-'}\n"
-                    f"☎️ Контакт: {contact or '-'}\n"
-                    f"📝 Имя из формы: {name or '-'}"
+                    f"👤 TG: {first_name} (@{username}) | id={tg_id}\n"
+                    f"📝 Имя из формы: {name or '-'}\n"
+                    f"🧩 Ниша из формы: {niche or '-'}\n"
+                    f"☎️ Контакт: {contact or '-'}"
                 )
             )
         except Exception as e:
             print("send_message to owner failed:", e)
 
-    return web.json_response({"ok": True, "leadId": lead_id})
+    deeplink = f"https://t.me/{BOT_USERNAME}?start=lead_{lead_id}" if BOT_USERNAME else ""
+
+    return web.json_response({"ok": True, "leadId": lead_id, "deeplink": deeplink})
 
 
 async def api_leads_website(request: web.Request) -> web.Response:
