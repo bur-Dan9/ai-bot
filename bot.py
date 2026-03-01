@@ -15,8 +15,10 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# IMPORTANT: this must show up in Render logs after deploy
-BUILD_TAG = "MINIAPP_NAME_FROM_FORM_ONLY_V4"
+# ============================================================
+# ✅ BUILD TAG (check deploy via /version)
+# ============================================================
+BUILD_TAG = "MINIAPP_V4"
 print(f"### BUILD: {BUILD_TAG} ###", flush=True)
 
 # ============================================================
@@ -267,8 +269,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     niche = (lead["niche_from_form"] or "").strip()
                     contact = (lead["contact_from_form"] or "").strip()
 
-                    # ✅ имя строго из формы (если пусто — "друг")
-                    final_name = name_from_form or "друг"
+                    # ✅ имя в приоритете из формы
+                    final_name = name_from_form if name_from_form else (user.first_name or "друг")
 
                     # upsert users
                     await conn.execute("""
@@ -423,6 +425,7 @@ async def health(request: web.Request) -> web.Response:
 
 
 async def version(request: web.Request) -> web.Response:
+    # deploy check
     return web.Response(text=f"build={BUILD_TAG}")
 
 
@@ -442,7 +445,7 @@ async def webhook_handler(request: web.Request) -> web.Response:
 
 
 # ============================================================
-# ✅ Miniapp leads endpoint (STRICT: name ONLY from form, never TG)
+# ✅ Miniapp leads endpoint (STRICT: name ONLY from form; never TG)
 # ============================================================
 async def api_leads_miniapp(request: web.Request) -> web.Response:
     try:
@@ -470,9 +473,10 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     niche = (form.get("niche") or "").strip()
     contact = (form.get("contact") or "").strip()
 
-    # DEBUG (keep for now; remove later if you want)
+    # Debug (remove later if you want)
     print("### MINIAPP FORM ###", form, flush=True)
-    print("### MINIAPP name=", repr(name), "niche=", repr(niche), "TG first_name=", repr(first_name), "username=", repr(username), flush=True)
+    print("### MINIAPP name=", repr(name), "niche=", repr(niche),
+          "TG first_name=", repr(first_name), "username=", repr(username), flush=True)
 
     async with DB_POOL.acquire() as conn:
         await conn.execute("""
@@ -492,14 +496,9 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
             RETURNING id
         """, int(tg_id), name, niche, contact, json.dumps(form))
 
-    # ✅ STRICT: ONLY form name, never TG name
-    final_name = name.strip() if name else ""
-    if not final_name:
-        final_name = "друг"
-
-    final_niche = niche.strip() if niche else ""
-    if not final_niche:
-        final_niche = "—"
+    # STRICT: only from form
+    final_name = (name or "").strip() or "друг"
+    final_niche = (niche or "").strip() or "—"
 
     user_msg = (
         f"✅ Спасибо, {final_name}! Заявка принята. Ниша: {final_niche}. "
