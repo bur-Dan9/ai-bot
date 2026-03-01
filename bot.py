@@ -18,7 +18,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ============================================================
 # ✅ BUILD TAG (check deploy via /version)
 # ============================================================
-BUILD_TAG = "MINIAPP_V5_SHORT_GREETING"
+BUILD_TAG = "MINIAPP_V6_DAILY_REPORT_AND_HISTORY"
 print(f"### BUILD: {BUILD_TAG} ###", flush=True)
 
 # ============================================================
@@ -37,6 +37,9 @@ REPORT_TASK_TOKEN = os.environ.get("REPORT_TASK_TOKEN")
 
 # Render URL
 BASE_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://ai-bot-a3aj.onrender.com").rstrip("/")
+
+# если =1, то владельцу будет приходить "живой поток" сообщений (по умолчанию выключено)
+OWNER_LIVE_FEED = os.environ.get("OWNER_LIVE_FEED", "0") == "1"
 
 # ============================================================
 # ✅ CORS
@@ -206,6 +209,20 @@ async def db_get_user_niche(tg_id: int) -> str | None:
         return await conn.fetchval("SELECT business_niche FROM users WHERE tg_id=$1", tg_id)
 
 
+async def db_log_message(tg_id: int, direction: str, text: str):
+    """direction: 'in' | 'out' """
+    if not DB_POOL:
+        return
+    text = (text or "").strip()
+    if not text:
+        return
+    async with DB_POOL.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO messages (tg_id, direction, text) VALUES ($1, $2, $3)",
+            int(tg_id), direction, text
+        )
+
+
 async def send_owner_report(period: str = "day"):
     if not OWNER_ID or not DB_POOL or tg_app is None:
         return
@@ -316,10 +333,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
+    # ---------- (B) Обычный /start ----------
     await update.message.reply_text(WELCOME_TEXT)
 
 
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # отчёт по запросу — только владельцу
     if not OWNER_ID or str(update.effective_user.id) != str(OWNER_ID):
         return
 
@@ -328,6 +347,58 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         period = "day"
 
     await send_owner_report(period)
+
+
+async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """OWNER-only: /history <tg_id|@username> [limit]"""
+    if not OWNER_ID or str(update.effective_user.id) != str(OWNER_ID):
+        return
+    if not DB_POOL:
+        await update.message.reply_text("DB not ready")
+        return
+    if not context.args:
+        await update.message.reply_text("Формат: /history <tg_id|@username> [limit]\nПример: /history 123456789 30")
+        return
+
+    key = context.args[0].strip()
+    limit = 20
+    if len(context.args) > 1 and context.args[1].isdigit():
+        limit = min(50, max(5, int(context.args[1])))
+
+    async with DB_POOL.acquire() as conn:
+        tg_id = None
+        if key.startswith("@"):
+            tg_id = await conn.fetchval("SELECT tg_id FROM users WHERE username=$1", key[1:])
+        elif key.isdigit():
+            tg_id = int(key)
+
+        if not tg_id:
+            await update.message.reply_text("Не нашёл пользователя. Дай tg_id или @username.")
+            return
+
+        rows = await conn.fetch("""
+            SELECT direction, text, created_at
+            FROM messages
+            WHERE tg_id=$1
+            ORDER BY created_at DESC
+            LIMIT $2
+        """, tg_id, limit)
+
+    if not rows:
+        await update.message.reply_text("История пуста.")
+        return
+
+    rows = list(reversed(rows))
+    lines = [f"🧾 История для tg_id={tg_id} (последние {len(rows)}):\n"]
+    for r in rows:
+        ts = r["created_at"].astimezone(timezone.utc).strftime("%d.%m %H:%M UTC")
+        prefix = "👤" if r["direction"] == "in" else "🤖"
+        t = r["text"]
+        if len(t) > 300:
+            t = t[:300] + "…"
+        lines.append(f"{ts} {prefix} {t}")
+
+    await update.message.reply_text("\n".join(lines))
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -340,6 +411,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed:
         await update.message.reply_text(reason)
         return
+
+    # log incoming
+    await db_log_message(int(user.id), "in", text)
 
     if not context.user_data.get("introduced"):
         context.user_data["introduced"] = True
@@ -375,11 +449,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         answer = ask_gemini(history)
         await update.message.reply_text(answer)
 
+        # log outgoing
+        await db_log_message(int(user.id), "out", answer)
+
         history.append({"role": "model", "parts": [{"text": answer}]})
         history = history[-(MAX_TURNS * 2):]
         context.user_data["history"] = history
 
-        if OWNER_ID and str(user.id) != str(OWNER_ID):
+        # ✅ live feed владельцу отключён по умолчанию
+        if OWNER_LIVE_FEED and OWNER_ID and str(user.id) != str(OWNER_ID):
             try:
                 await context.bot.send_message(
                     chat_id=int(OWNER_ID),
@@ -494,6 +572,7 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     except Exception as e:
         print("send_message to user failed:", e)
 
+    # owner получает лид (как и раньше)
     if OWNER_ID:
         try:
             await tg_app.bot.send_message(
@@ -590,9 +669,26 @@ async def main_async():
     DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     print("✅ DB pool ready", flush=True)
 
+    # создаём таблицу сообщений (если нет) — чтобы /history работал
+    async with DB_POOL.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+              id BIGSERIAL PRIMARY KEY,
+              tg_id BIGINT NOT NULL,
+              direction TEXT NOT NULL,
+              text TEXT NOT NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_messages_tg_id_created
+            ON messages (tg_id, created_at DESC);
+        """)
+
     tg_app = Application.builder().token(TOKEN).build()
     tg_app.add_handler(CommandHandler("start", start))
     tg_app.add_handler(CommandHandler("report", report))
+    tg_app.add_handler(CommandHandler("history", history_cmd))
     tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     await tg_app.initialize()
@@ -630,6 +726,7 @@ async def main_async():
     print("✅ API ready: /api/leads/miniapp  +  /api/leads/website", flush=True)
     print("✅ Task ready: GET /tasks/daily_report", flush=True)
     print("✅ Reports: /report day | /report week", flush=True)
+    print("✅ History: /history <tg_id|@username> [limit] (OWNER only)", flush=True)
 
     await asyncio.Event().wait()
 
