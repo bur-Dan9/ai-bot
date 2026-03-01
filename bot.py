@@ -18,7 +18,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ============================================================
 # ✅ BUILD TAG (check deploy via /version)
 # ============================================================
-BUILD_TAG = "MINIAPP_V4"
+BUILD_TAG = "MINIAPP_V5_SHORT_GREETING"
 print(f"### BUILD: {BUILD_TAG} ###", flush=True)
 
 # ============================================================
@@ -269,7 +269,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     niche = (lead["niche_from_form"] or "").strip()
                     contact = (lead["contact_from_form"] or "").strip()
 
-                    # ✅ имя в приоритете из формы
                     final_name = name_from_form if name_from_form else (user.first_name or "друг")
 
                     # upsert users
@@ -315,17 +314,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"⚠️ Не нашла заявку по ссылке: lead_{lead_id}.\n"
                     f"Пожалуйста, отправьте форму ещё раз."
                 )
-                if OWNER_ID:
-                    try:
-                        await context.bot.send_message(
-                            chat_id=int(OWNER_ID),
-                            text=f"⚠️ Website lead not found: lead_{lead_id} (user {user.id} @{user.username})"
-                        )
-                    except Exception:
-                        pass
                 return
 
-    # ---------- (B) Обычный /start ----------
     await update.message.reply_text(WELCOME_TEXT)
 
 
@@ -425,7 +415,6 @@ async def health(request: web.Request) -> web.Response:
 
 
 async def version(request: web.Request) -> web.Response:
-    # deploy check
     return web.Response(text=f"build={BUILD_TAG}")
 
 
@@ -445,7 +434,7 @@ async def webhook_handler(request: web.Request) -> web.Response:
 
 
 # ============================================================
-# ✅ Miniapp leads endpoint (STRICT: name ONLY from form; never TG)
+# ✅ Miniapp leads endpoint (short greeting; name from FORM only)
 # ============================================================
 async def api_leads_miniapp(request: web.Request) -> web.Response:
     try:
@@ -473,11 +462,6 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     niche = (form.get("niche") or "").strip()
     contact = (form.get("contact") or "").strip()
 
-    # Debug (remove later if you want)
-    print("### MINIAPP FORM ###", form, flush=True)
-    print("### MINIAPP name=", repr(name), "niche=", repr(niche),
-          "TG first_name=", repr(first_name), "username=", repr(username), flush=True)
-
     async with DB_POOL.acquire() as conn:
         await conn.execute("""
             INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
@@ -496,14 +480,13 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
             RETURNING id
         """, int(tg_id), name, niche, contact, json.dumps(form))
 
-    # STRICT: only from form
     final_name = (name or "").strip() or "друг"
     final_niche = (niche or "").strip() or "—"
 
     user_msg = (
-        f"✅ Спасибо, {final_name}! Заявка принята. Ниша: {final_niche}. "
-        f"Я уже отправила вам сообщение в боте. "
-        f"Если сообщение не пришло — откройте чат и нажмите Start один раз."
+        f"Привет, {final_name}! 👋\n"
+        f"Спасибо, я записала вашу нишу: {final_niche}\n"
+        f"Опиши задачу в 1 фразе — помогу."
     )
 
     try:
