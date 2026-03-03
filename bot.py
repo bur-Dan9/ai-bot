@@ -18,7 +18,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ============================================================
 # ✅ BUILD TAG (check deploy via /version)
 # ============================================================
-BUILD_TAG = "MINIAPP_V9_CHATTY_FUNNEL_DAILY_ONLY"
+BUILD_TAG = "MINIAPP_V10_POLITE_YOU_FUNNEL_AFTER_FORM"
 print(f"### BUILD: {BUILD_TAG} ###", flush=True)
 
 # ============================================================
@@ -52,7 +52,8 @@ MODEL = "gemini-2.5-flash"
 SYSTEM_PROMPT = (
     "Ты — Soffi, дружелюбный и общительный AI-ассистент AWM OS.\n"
     "Ты говоришь естественно и тепло, как умный помощник, без канцелярита и без давления.\n"
-    "Ты можешь отвечать на отвлечённые вопросы и поддерживать лёгкий диалог, но всегда мягко возвращаешь разговор к воронке.\n\n"
+    "Ты можешь отвечать на отвлечённые вопросы и поддерживать лёгкий диалог, но всегда мягко возвращаешь разговор к воронке.\n"
+    "ВСЕГДА общайся уважительно и обращайся к пользователю на «Вы».\n\n"
 
     "Контекст продукта:\n"
     "AWM OS — AI-система маркетинга в Telegram без человеческого фактора. Работает 24/7: принимает задачи и сразу приступает.\n"
@@ -122,7 +123,7 @@ WELCOME_TEXT = (
 
 IG_WELCOME_TEXT = (
     "Здравствуйте! Я Soffi 🦾\n"
-    "Вижу, вы пришли из Instagram.\n"
+    "Вижу, Вы пришли из Instagram.\n"
     "AWM OS скоро запускается: AI-маркетинг в Telegram без человеческого фактора, 24/7.\n\n"
     "Чтобы зафиксировать ранний доступ, заполните Mini App (имя + ниша)."
 )
@@ -173,6 +174,17 @@ def _extract_name(text: str) -> str | None:
         if m:
             return m.group(1)
     return None
+
+
+def is_decline(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    patterns = [
+        "не надо", "ничего", "ничем", "пока", "позже", "не сейчас", "нет", "не хочу", "неинтересно",
+        "сам разберусь", "потом", "ок", "ясно", "спасибо", "спс", "всё", "хватит"
+    ]
+    return any(p in t for p in patterns)
 
 
 def ask_gemini(contents: list[dict]) -> str:
@@ -262,6 +274,25 @@ async def db_get_user_niche(tg_id: int) -> str | None:
         return None
     async with DB_POOL.acquire() as conn:
         return await conn.fetchval("SELECT business_niche FROM users WHERE tg_id=$1", int(tg_id))
+
+
+async def db_set_user_niche(tg_id: int, niche: str):
+    if not DB_POOL:
+        return
+    niche = (niche or "").strip()
+    if not niche:
+        return
+    async with DB_POOL.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
+            VALUES ($1, '', '', NULLIF($2,''), NULL, now())
+            ON CONFLICT (tg_id) DO UPDATE SET
+              business_niche = COALESCE(NULLIF(users.business_niche,''), EXCLUDED.business_niche),
+              last_seen = now()
+            """,
+            int(tg_id), niche
+        )
 
 
 async def db_log_message(tg_id: int, direction: str, text: str):
@@ -498,10 +529,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                     msg = (
                         f"Здравствуйте, {final_name}! 👋\n"
-                        f"Спасибо за заявку — вы в списке раннего доступа ✅\n\n"
+                        f"Спасибо за заявку — Вы в списке раннего доступа ✅\n\n"
                         f"AWM OS скоро запускается: AI-маркетинг в Telegram без человеческого фактора, 24/7.\n"
                         f"Отчёты — текстом, таблицей или PDF.\n\n"
-                        f"Коротко: что сейчас важнее — лиды, контент, трафик или инфраструктура (сайт/mini app)?"
+                        f"Чем ещё могу быть полезна?"
                     )
 
                     await update.message.reply_text(msg)
@@ -553,7 +584,7 @@ async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tg_id = int(key)
 
         if not tg_id:
-            await update.message.reply_text("Не нашёл пользователя. Дай tg_id или @username.")
+            await update.message.reply_text("Не нашла пользователя. Дайте tg_id или @username.")
             return
 
         rows = await conn.fetch("""
@@ -605,7 +636,7 @@ async def journey_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tg_id = int(key)
 
         if not tg_id:
-            await update.message.reply_text("Не нашёл пользователя. Дай tg_id или @username.")
+            await update.message.reply_text("Не нашла пользователя. Дайте tg_id или @username.")
             return
 
         rows = await conn.fetch("""
@@ -663,10 +694,89 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # log incoming
     await db_log_message(int(user.id), "in", text)
-
-    # journey event that user is active in bot
     await db_log_event(event="message", source="bot", tg_id=int(user.id), meta={"text_preview": text[:160]})
 
+    # ===========================
+    # ✅ Post-form polite follow-up:
+    # If user declines, we gently ask name (confirm TG name) and niche.
+    # ===========================
+    if is_decline(text):
+        # If name not confirmed yet — confirm Telegram first_name as name
+        if not context.user_data.get("name_confirmed"):
+            tg_first = (user.first_name or "").strip()
+            if tg_first:
+                await update.message.reply_text(
+                    f"Поняла. Подскажите, пожалуйста: корректно обращаться к Вам как **{tg_first}**? (да/нет)",
+                    parse_mode="Markdown"
+                )
+                context.user_data["awaiting_name_confirm"] = True
+                return
+
+        # If niche not known — ask niche
+        current_niche = await db_get_user_niche(int(user.id))
+        if not current_niche:
+            await update.message.reply_text("Хорошо. Тогда уточню один момент: в какой отрасли Вы работаете? (1–2 слова)")
+            context.user_data["awaiting_niche"] = True
+            return
+
+        # Everything known — finish politely
+        await update.message.reply_text("Хорошо, спасибо! Если появятся вопросы — напишите в любой момент 😊")
+        return
+
+    # --- waiting name confirm (да/нет) ---
+    if context.user_data.get("awaiting_name_confirm"):
+        low = text.lower()
+        if low in ("да", "ага", "ок", "yes", "y"):
+            context.user_data["name_confirmed"] = True
+            context.user_data["awaiting_name_confirm"] = False
+            # Next: niche if missing
+            current_niche = await db_get_user_niche(int(user.id))
+            if not current_niche:
+                await update.message.reply_text("Спасибо! И ещё один вопрос: в какой отрасли Вы работаете? (1–2 слова)")
+                context.user_data["awaiting_niche"] = True
+                return
+            await update.message.reply_text("Спасибо! Чем ещё могу быть полезна?")
+            return
+        if low in ("нет", "неа", "no", "n"):
+            context.user_data["awaiting_name_confirm"] = False
+            await update.message.reply_text("Как правильно к Вам обращаться? Напишите, пожалуйста, имя.")
+            context.user_data["awaiting_name_manual"] = True
+            return
+        await update.message.reply_text("Подскажите, пожалуйста, просто «да» или «нет».")
+        return
+
+    # --- waiting name manual input ---
+    if context.user_data.get("awaiting_name_manual"):
+        nm = text.strip()
+        if len(nm) >= 2:
+            context.user_data["name_confirmed"] = True
+            context.user_data["awaiting_name_manual"] = False
+            context.user_data["user_name"] = nm
+            current_niche = await db_get_user_niche(int(user.id))
+            if not current_niche:
+                await update.message.reply_text("Спасибо. И ещё один вопрос: в какой отрасли Вы работаете? (1–2 слова)")
+                context.user_data["awaiting_niche"] = True
+                return
+            await update.message.reply_text("Спасибо! Чем ещё могу быть полезна?")
+            return
+        await update.message.reply_text("Напишите, пожалуйста, имя (минимум 2 символа).")
+        return
+
+    # --- waiting niche ---
+    if context.user_data.get("awaiting_niche"):
+        n = text.strip()
+        if len(n) >= 2:
+            await db_set_user_niche(int(user.id), n)
+            context.user_data["awaiting_niche"] = False
+            await db_log_event(event="niche_set", source="bot", tg_id=int(user.id), meta={"niche": n})
+            await update.message.reply_text("Спасибо! Чем ещё могу быть полезна?")
+            return
+        await update.message.reply_text("Напишите, пожалуйста, отрасль/нишу (1–2 слова).")
+        return
+
+    # ===========================
+    # Continue normal flow with Gemini
+    # ===========================
     if not context.user_data.get("introduced"):
         context.user_data["introduced"] = True
         context.user_data["history"] = []
@@ -677,14 +787,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    # store extracted name if user says it
     name = _extract_name(text)
     if name:
         context.user_data["user_name"] = name
 
     niche = await db_get_user_niche(int(user.id))
 
-    # build history for model
     history = context.user_data.get("history", [])
     user_name = context.user_data.get("user_name")
 
@@ -702,14 +810,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         answer = ask_gemini(history)
         await update.message.reply_text(answer)
 
-        # log outgoing
         await db_log_message(int(user.id), "out", answer)
-
         history.append({"role": "model", "parts": [{"text": answer}]})
         history = history[-(MAX_TURNS * 2):]
         context.user_data["history"] = history
 
-        # optional live feed (off by default)
         if OWNER_LIVE_FEED and OWNER_ID and str(user.id) != str(OWNER_ID):
             try:
                 await context.bot.send_message(
@@ -765,7 +870,8 @@ async def webhook_handler(request: web.Request) -> web.Response:
 
 
 # ============================================================
-# ✅ Miniapp leads endpoint (Mini App = name+niche only)
+# ✅ Miniapp leads endpoint (Mini App = name+niche)
+# After submit: asks "Чем ещё могу быть полезна?"
 # ============================================================
 async def api_leads_miniapp(request: web.Request) -> web.Response:
     try:
@@ -789,7 +895,6 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     if not tg_id or not DB_POOL or tg_app is None:
         return web.json_response({"ok": False, "error": "No tg_id or DB not ready"}, status=400)
 
-    # Mini App ожидаем: name + niche (contact может быть пустым — не ломаем)
     name = (form.get("name") or "").strip()
     niche = (form.get("niche") or "").strip()
     contact = (form.get("contact") or "").strip()
@@ -812,7 +917,6 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
             RETURNING id
         """, int(tg_id), name, niche, contact, json.dumps(form))
 
-    # Journey: miniapp_submit (important)
     await db_log_event(
         event="miniapp_submit",
         source="miniapp",
@@ -821,13 +925,14 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
         meta={"name": name, "niche": niche},
     )
 
-    # ✅ Single confirmation only here (as you requested)
-    final_name = (name or "").strip() or "друг"
+    final_name = (name or "").strip() or (first_name or "друг")
     final_niche = (niche or "").strip() or "—"
+
     user_msg = (
         f"Спасибо, {final_name}! ✅\n"
         f"Зафиксировала: ниша — {final_niche}.\n"
-        f"Всё верно? Если нужно исправить — просто напишите как правильно (имя и ниша одним сообщением)."
+        f"Если нужно исправить — просто напишите как правильно (имя и ниша одним сообщением).\n\n"
+        f"Чем ещё могу быть полезна?"
     )
 
     try:
@@ -868,7 +973,6 @@ async def api_leads_website(request: web.Request) -> web.Response:
             RETURNING id
         """, name, niche, tg or contact, json.dumps(payload))
 
-    # journey pending submit (no tg_id yet)
     await db_log_event(
         event="website_submit",
         source="website",
