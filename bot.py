@@ -18,7 +18,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ============================================================
 # ✅ BUILD TAG (check deploy via /version)
 # ============================================================
-BUILD_TAG = "MINIAPP_V8_JOURNEY_DAILY_ONLY_FIX"
+BUILD_TAG = "MINIAPP_V9_CHATTY_FUNNEL_DAILY_ONLY"
 print(f"### BUILD: {BUILD_TAG} ###", flush=True)
 
 # ============================================================
@@ -29,11 +29,11 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 OWNER_ID = os.environ.get("OWNER_ID")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-BOT_USERNAME = os.environ.get("BOT_USERNAME")  # username бота без "@"
-REPORT_TASK_TOKEN = os.environ.get("REPORT_TASK_TOKEN")  # секрет для /tasks/daily_report
+BOT_USERNAME = os.environ.get("BOT_USERNAME")  # bot username without "@"
+REPORT_TASK_TOKEN = os.environ.get("REPORT_TASK_TOKEN")
 BASE_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://ai-bot-a3aj.onrender.com").rstrip("/")
 
-# если =1, то владельцу будет приходить "живой поток" сообщений (по умолчанию выключено)
+# Optional: if =1 then owner receives live feed of user messages (default OFF)
 OWNER_LIVE_FEED = os.environ.get("OWNER_LIVE_FEED", "0") == "1"
 
 # ============================================================
@@ -50,32 +50,87 @@ ALLOWED_ORIGINS = {
 MODEL = "gemini-2.5-flash"
 
 SYSTEM_PROMPT = (
-    "Ты — Soffi, AI-ассистент агентства 'awm os'.\n"
-    "Правила:\n"
-    "1) НЕ представляйся заново в каждом ответе.\n"
-    "2) Пиши кратко и по делу, без воды.\n"
-    "3) Задавай 1-2 уточняющих вопроса, если нужно.\n"
-    "4) Запоминай контекст диалога и имя пользователя (если он назвал).\n"
-    "5) Цель: помогать и мягко вести к обсуждению задач бизнеса и бюджета на подписку.\n"
+    "Ты — Soffi, дружелюбный и общительный AI-ассистент AWM OS.\n"
+    "Ты говоришь естественно и тепло, как умный помощник, без канцелярита и без давления.\n"
+    "Ты можешь отвечать на отвлечённые вопросы и поддерживать лёгкий диалог, но всегда мягко возвращаешь разговор к воронке.\n\n"
+
+    "Контекст продукта:\n"
+    "AWM OS — AI-система маркетинга в Telegram без человеческого фактора. Работает 24/7: принимает задачи и сразу приступает.\n"
+    "Есть два направления:\n"
+    "1) AI Маркетинг (9 этапов): старт цели → аудит → аудитория → конкуренты → креативы → SMM → реклама → аналитика → масштаб.\n"
+    "Отчёты в Telegram: текст, таблица или PDF.\n"
+    "2) AI Разработка: сайт/лендинг + Telegram Mini App + интеграция с ботом (лиды/отчёты).\n"
+    "Сервис скоро запускается: мы на финальной стадии разработки.\n\n"
+
+    "Услуги (ровно 4):\n"
+    "A) AI-Маркетинг Автопилот — подписка (ежемесячно), полное сопровождение 24/7.\n"
+    "B) Разработка экосистемы — разово: сайт + Telegram Mini App под ключ.\n"
+    "C) Глубокий AI-аудит — разово: диагностика воронки и точек роста.\n"
+    "D) Content & Ads Turbo — подписка (ежемесячно): запуск и контроль трафика без человеческого фактора, "
+    "24/7 анализ креативов и оптимизация на данных (слабое выключаем, сильное усиливаем).\n\n"
+
+    "Главная цель диалога:\n"
+    "Собрать максимум данных и довести до заявки.\n"
+    "Данные, которые нужно собрать:\n"
+    "- Имя и ниша (если НЕ сайт — через Mini App; если сайт lead_123 — уже есть, Mini App не нужен)\n"
+    "- Что человек хочет получить (1–2 предложения)\n"
+    "- Какая услуга лучше подходит (ты предлагаешь сама)\n"
+    "- Комфортный бюджет (после согласования услуги):\n"
+    "  • для подписки (Автопилот, Turbo) — диапазон в месяц\n"
+    "  • для разовой услуги (Экосистема, Аудит) — диапазон разово\n\n"
+
+    "Правила воронки:\n"
+    "1) Если лид НЕ с сайта: сначала направь в Mini App (имя+ниша). После Mini App сделай ОДНО подтверждение: имя/ниша верно?\n"
+    "   Если нет — попроси исправить одним сообщением и продолжай дальше.\n"
+    "2) Если лид с сайта (lead_123): Mini App пропускаем.\n"
+    "3) Ты НЕ называешь цены и НЕ говоришь тарифы. Никогда.\n"
+    "4) Ты НЕ обещаешь конкретные финансовые результаты.\n"
+    "5) Ты анализируешь текст пользователя и сама предлагаешь 1 наиболее подходящую услугу.\n"
+    "   Затем один раз уточняешь: «Ок фиксирую X или выбрать другой?»\n"
+    "6) Бюджет спрашиваешь ТОЛЬКО после того, как услуга согласована.\n"
+    "7) После бюджета: говоришь, что мы завершаем разработку и уведомим о старте/условиях в этом чате.\n\n"
+
+    "Как предлагать услугу (по смыслу):\n"
+    "- Если хотят системно ‘под ключ’, контент+реклама+ведение, регулярность → Автопилот.\n"
+    "- Если хотят сайт/лендинг, mini app, интеграцию, инфраструктуру → Экосистема.\n"
+    "- Если не понимают ‘почему не работает’, хотят разбор/диагностику → Глубокий AI-аудит.\n"
+    "- Если нужно усилить рекламу/креативы/трафик, фокус на данных и оптимизация → Turbo.\n\n"
+
+    "Поведение на отвлечённые вопросы:\n"
+    "- Сначала коротко и по делу ответь.\n"
+    "- Потом мягко вернись к шагу воронки одной фразой.\n"
+    "Пример: «Да, могу объяснить. Чтобы зафиксировать заявку на запуск — скажите, что сейчас важнее…»\n\n"
+
+    "Обязательные формулировки (используй по смыслу):\n"
+    "- «Сервис скоро запускается, мы на финальном этапе разработки.»\n"
+    "- «Без человеческого фактора: меньше субъективности, больше решений на данных.»\n"
+    "- «Работаем 24/7: принимаем задачи и сразу приступаем.»\n"
+    "- «Отчёты в Telegram: текст, таблица или PDF.»\n\n"
+
+    "Формат ответа:\n"
+    "- 1–4 строки\n"
+    "- максимум 1–2 вопроса за раз\n"
+    "- дружелюбно, уверенно, без давления\n"
 )
 
 WELCOME_TEXT = (
-    "Привет! Я Soffi 🦾\n"
-    "Помогаю понять, как ИИ может ускорить маркетинг и продажи.\n"
-    "Для начала: чем занимаетесь и в какой нише/городе?"
+    "Здравствуйте! Я Soffi 🦾\n"
+    "AWM OS — AI-система маркетинга в Telegram без человеческого фактора: 24/7 принимаем задачи и сразу приступаем.\n"
+    "Отчёты — текстом, таблицей или PDF.\n\n"
+    "Чтобы зафиксировать ранний доступ, заполните Mini App (имя + ниша)."
 )
 
 IG_WELCOME_TEXT = (
-    "Привет! Я Soffi 🦾\n"
-    "Вижу, вы пришли из Instagram.\n\n"
-    "Что сейчас приоритетнее: лиды, контент или реклама?"
+    "Здравствуйте! Я Soffi 🦾\n"
+    "Вижу, вы пришли из Instagram.\n"
+    "AWM OS скоро запускается: AI-маркетинг в Telegram без человеческого фактора, 24/7.\n\n"
+    "Чтобы зафиксировать ранний доступ, заполните Mini App (имя + ниша)."
 )
 
 # ============================================================
 # ✅ LIMITS / MEMORY
 # ============================================================
 MAX_TURNS = 12
-
 MAX_REQUESTS_PER_DAY = 200
 GLOBAL_LIMIT = {"date": None, "count": 0, "blocked_date": None}
 
@@ -128,11 +183,10 @@ def ask_gemini(contents: list[dict]) -> str:
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "contents": contents,
-        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 700},
+        "generationConfig": {"temperature": 0.75, "maxOutputTokens": 700},
     }
 
     r = requests.post(endpoint, params={"key": GOOGLE_API_KEY}, json=payload, timeout=20)
-
     if r.status_code == 429:
         raise RuntimeError("429: quota/rate limit")
     if r.status_code != 200:
@@ -207,11 +261,10 @@ async def db_get_user_niche(tg_id: int) -> str | None:
     if not DB_POOL:
         return None
     async with DB_POOL.acquire() as conn:
-        return await conn.fetchval("SELECT business_niche FROM users WHERE tg_id=$1", tg_id)
+        return await conn.fetchval("SELECT business_niche FROM users WHERE tg_id=$1", int(tg_id))
 
 
 async def db_log_message(tg_id: int, direction: str, text: str):
-    """direction: 'in' | 'out' """
     if not DB_POOL:
         return
     text = (text or "").strip()
@@ -224,14 +277,7 @@ async def db_log_message(tg_id: int, direction: str, text: str):
         )
 
 
-async def db_log_event(
-    event: str,
-    source: str,
-    tg_id: int | None = None,
-    lead_id: int | None = None,
-    meta: dict | None = None,
-):
-    """Лента событий/переходов (путь пользователя): instagram → miniapp → bot ..."""
+async def db_log_event(event: str, source: str, tg_id: int | None = None, lead_id: int | None = None, meta: dict | None = None):
     if not DB_POOL:
         return
     async with DB_POOL.acquire() as conn:
@@ -248,6 +294,9 @@ async def db_log_event(
         )
 
 
+# ============================================================
+# ✅ Reports / Journey
+# ============================================================
 async def _get_first_source_for_tg(tg_id: int) -> tuple[str | None, datetime | None]:
     if not DB_POOL:
         return None, None
@@ -279,7 +328,6 @@ def _compact_chain(events: list[dict]) -> str:
 
 
 async def send_owner_report(period: str = "day"):
-    """✅ Только отчёты владельцу. ❌ Без мгновенных уведомлений о лидах."""
     if not OWNER_ID or not DB_POOL or tg_app is None:
         return
 
@@ -328,12 +376,15 @@ async def send_owner_report(period: str = "day"):
     lines.append(f"— пользователей с событиями: {len(by_tg)}")
     lines.append("")
 
-    for tg_id, events in list(by_tg.items())[:40]:
+    for tg_id, events in list(by_tg.items())[:60]:
         first_source, first_dt = await _get_first_source_for_tg(tg_id)
         chain = _compact_chain(events)
 
         name = "-"
         niche = "-"
+        service = "-"
+        budget = "-"
+
         for e in reversed(events):
             meta = e.get("meta") or {}
             if isinstance(meta, str):
@@ -346,19 +397,25 @@ async def send_owner_report(period: str = "day"):
                     name = meta["name"]
                 if meta.get("niche"):
                     niche = meta["niche"]
-            if name != "-" and niche != "-":
+                if meta.get("service"):
+                    service = meta["service"]
+                if meta.get("budget"):
+                    budget = meta["budget"]
+            if name != "-" and niche != "-" and service != "-" and budget != "-":
                 break
 
         dt_s = first_dt.astimezone(timezone.utc).strftime("%d.%m %H:%M UTC") if first_dt else "-"
         lines.append(f"👤 tg_id={tg_id} | старт: {first_source or '-'} ({dt_s})")
         lines.append(f"   путь: {chain}")
         if name != "-" or niche != "-":
-            lines.append(f"   форма: {name} • {niche}")
+            lines.append(f"   профиль: {name} • {niche}")
+        if service != "-" or budget != "-":
+            lines.append(f"   запрос: {service} • бюджет: {budget}")
         lines.append("")
 
     if pending_web:
         lines.append("⏳ Website лиды без подтверждения (не нажали deep-link):")
-        for r in pending_web[:20]:
+        for r in pending_web[:30]:
             lead_id = r["lead_id"]
             dt = r["created_at"].astimezone(timezone.utc).strftime("%d.%m %H:%M UTC")
             lines.append(f"   lead_{lead_id} • {dt}")
@@ -383,8 +440,8 @@ async def send_owner_report(period: str = "day"):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /start
-    /start ig               (источник Instagram)
-    /start lead_123         (подтверждение лидов с сайта)
+    /start ig               (Instagram source)
+    /start lead_123         (website lead confirmation)
     """
     context.user_data["introduced"] = True
     context.user_data["history"] = []
@@ -392,26 +449,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args or []
 
-    # ---------- (IG) Пришёл из Instagram ----------
+    # Instagram start
     if args and args[0].lower() in ("ig", "insta", "instagram"):
-        tg_id = int(user.id)
-
-        if DB_POOL:
-            async with DB_POOL.acquire() as conn:
-                await conn.execute("""
-                    INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
-                    VALUES ($1, $2, $3, NULL, NULL, now())
-                    ON CONFLICT (tg_id) DO UPDATE SET
-                      first_name = EXCLUDED.first_name,
-                      username = EXCLUDED.username,
-                      last_seen = now()
-                """, tg_id, user.first_name or "", user.username or "")
-
-        await db_log_event(event="start", source="instagram", tg_id=tg_id, meta={"from": "ig_deeplink"})
+        await db_log_event(event="start", source="instagram", tg_id=int(user.id), meta={"from": "ig_deeplink"})
         await update.message.reply_text(IG_WELCOME_TEXT)
         return
 
-    # ---------- (A) Подтверждение лида с сайта ----------
+    # Website confirm start
     if args and args[0].startswith("lead_") and DB_POOL:
         lead_id_str = args[0].split("lead_", 1)[1]
         if lead_id_str.isdigit():
@@ -427,9 +471,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     name_from_form = (lead["name_from_form"] or "").strip()
                     niche = (lead["niche_from_form"] or "").strip()
                     contact = (lead["contact_from_form"] or "").strip()
-
                     final_name = name_from_form if name_from_form else (user.first_name or "друг")
 
+                    # upsert users
                     await conn.execute("""
                         INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
                         VALUES ($1, $2, $3, NULLIF($4,''), NULLIF($5,''), now())
@@ -443,6 +487,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                     await conn.execute("UPDATE leads SET tg_id=$1 WHERE id=$2", int(user.id), lead_id)
 
+                    # log journey
                     await db_log_event(
                         event="website_confirm",
                         source="website",
@@ -452,17 +497,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
 
                     msg = (
-                        f"**Здравствуйте, {final_name}! 👋**\n"
-                        f"Меня зовут **Soff**. Спасибо, что оставили заявку — добро пожаловать в ранний доступ ✅\n\n"
-                        f"Я — AI-ассистент **AWM OS**. Мы строим единый Telegram-интерфейс для управления **10+ ИИ-агентами**, "
-                        f"которые 24/7 помогают бизнесу: от анализа до контента, рекламы и отчётов.\n"
-                        f"Это **9 этапов автоматизации**, которые превращают хаос в прибыль и снимают с вас рутину.\n\n"
-                        f"Вижу вашу сферу: **{niche or 'не указана'}**.\n"
-                        f"Сервис ещё в разработке — завершаем финальную сборку.\n\n"
-                        f"Подскажите, пожалуйста, что сейчас приоритетнее: **лиды, контент или реклама?**"
+                        f"Здравствуйте, {final_name}! 👋\n"
+                        f"Спасибо за заявку — вы в списке раннего доступа ✅\n\n"
+                        f"AWM OS скоро запускается: AI-маркетинг в Telegram без человеческого фактора, 24/7.\n"
+                        f"Отчёты — текстом, таблицей или PDF.\n\n"
+                        f"Коротко: что сейчас важнее — лиды, контент, трафик или инфраструктура (сайт/mini app)?"
                     )
 
-                    await update.message.reply_text(msg, parse_mode="Markdown")
+                    await update.message.reply_text(msg)
                     return
 
                 await update.message.reply_text(
@@ -471,6 +513,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
+    # Default start
     await db_log_event(event="start", source="telegram", tg_id=int(user.id), meta={"from": "direct_start"})
     await update.message.reply_text(WELCOME_TEXT)
 
@@ -487,6 +530,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """OWNER-only: /history <tg_id|@username> [limit]"""
     if not OWNER_ID or str(update.effective_user.id) != str(OWNER_ID):
         return
     if not DB_POOL:
@@ -499,7 +543,7 @@ async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = context.args[0].strip()
     limit = 20
     if len(context.args) > 1 and context.args[1].isdigit():
-        limit = min(50, max(5, int(context.args[1])))
+        limit = min(60, max(5, int(context.args[1])))
 
     async with DB_POOL.acquire() as conn:
         tg_id = None
@@ -530,27 +574,28 @@ async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ts = r["created_at"].astimezone(timezone.utc).strftime("%d.%m %H:%M UTC")
         prefix = "👤" if r["direction"] == "in" else "🤖"
         t = r["text"]
-        if len(t) > 300:
-            t = t[:300] + "…"
+        if len(t) > 350:
+            t = t[:350] + "…"
         lines.append(f"{ts} {prefix} {t}")
 
     await update.message.reply_text("\n".join(lines))
 
 
 async def journey_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """OWNER-only: /journey <tg_id|@username> [limit]"""
     if not OWNER_ID or str(update.effective_user.id) != str(OWNER_ID):
         return
     if not DB_POOL:
         await update.message.reply_text("DB not ready")
         return
     if not context.args:
-        await update.message.reply_text("Формат: /journey <tg_id|@username> [limit]\nПример: /journey 123456789 50")
+        await update.message.reply_text("Формат: /journey <tg_id|@username> [limit]\nПример: /journey 123456789 60")
         return
 
     key = context.args[0].strip()
-    limit = 30
+    limit = 40
     if len(context.args) > 1 and context.args[1].isdigit():
-        limit = min(80, max(10, int(context.args[1])))
+        limit = min(120, max(10, int(context.args[1])))
 
     async with DB_POOL.acquire() as conn:
         tg_id = None
@@ -575,7 +620,7 @@ async def journey_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Путь пуст.")
         return
 
-    lines = [f"🧭 Путь для tg_id={tg_id} (первые {len(rows)} событий):\n"]
+    lines = [f"🧭 Путь для tg_id={tg_id} (событий: {len(rows)}):\n"]
     for r in rows:
         ts = r["created_at"].astimezone(timezone.utc).strftime("%d.%m %H:%M UTC")
         source = r["source"] or "-"
@@ -587,15 +632,18 @@ async def journey_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 meta = json.loads(meta)
             except Exception:
                 meta = {}
-        name = meta.get("name") if isinstance(meta, dict) else None
-        niche = meta.get("niche") if isinstance(meta, dict) else None
         extra = []
         if lead_id:
             extra.append(f"lead_{lead_id}")
-        if name:
-            extra.append(f"name={name}")
-        if niche:
-            extra.append(f"niche={niche}")
+        if isinstance(meta, dict):
+            if meta.get("name"):
+                extra.append(f"name={meta['name']}")
+            if meta.get("niche"):
+                extra.append(f"niche={meta['niche']}")
+            if meta.get("service"):
+                extra.append(f"service={meta['service']}")
+            if meta.get("budget"):
+                extra.append(f"budget={meta['budget']}")
         extra_s = f" ({', '.join(extra)})" if extra else ""
         lines.append(f"{ts} • {source} • {event}{extra_s}")
 
@@ -613,8 +661,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reason)
         return
 
+    # log incoming
     await db_log_message(int(user.id), "in", text)
-    await db_log_event(event="message", source="bot", tg_id=int(user.id), meta={"text_preview": text[:120]})
+
+    # journey event that user is active in bot
+    await db_log_event(event="message", source="bot", tg_id=int(user.id), meta={"text_preview": text[:160]})
 
     if not context.user_data.get("introduced"):
         context.user_data["introduced"] = True
@@ -626,12 +677,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
+    # store extracted name if user says it
     name = _extract_name(text)
     if name:
         context.user_data["user_name"] = name
 
     niche = await db_get_user_niche(int(user.id))
 
+    # build history for model
     history = context.user_data.get("history", [])
     user_name = context.user_data.get("user_name")
 
@@ -642,7 +695,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prefix += f"(Ниша/род деятельности пользователя: {niche})\n"
 
     user_text_for_model = prefix + text if prefix else text
-
     history.append({"role": "user", "parts": [{"text": user_text_for_model}]})
     history = history[-(MAX_TURNS * 2):]
 
@@ -650,12 +702,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         answer = ask_gemini(history)
         await update.message.reply_text(answer)
 
+        # log outgoing
         await db_log_message(int(user.id), "out", answer)
 
         history.append({"role": "model", "parts": [{"text": answer}]})
         history = history[-(MAX_TURNS * 2):]
         context.user_data["history"] = history
 
+        # optional live feed (off by default)
         if OWNER_LIVE_FEED and OWNER_ID and str(user.id) != str(OWNER_ID):
             try:
                 await context.bot.send_message(
@@ -711,7 +765,7 @@ async def webhook_handler(request: web.Request) -> web.Response:
 
 
 # ============================================================
-# ✅ Miniapp leads endpoint (short greeting; name from FORM only)
+# ✅ Miniapp leads endpoint (Mini App = name+niche only)
 # ============================================================
 async def api_leads_miniapp(request: web.Request) -> web.Response:
     try:
@@ -735,6 +789,7 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     if not tg_id or not DB_POOL or tg_app is None:
         return web.json_response({"ok": False, "error": "No tg_id or DB not ready"}, status=400)
 
+    # Mini App ожидаем: name + niche (contact может быть пустым — не ломаем)
     name = (form.get("name") or "").strip()
     niche = (form.get("niche") or "").strip()
     contact = (form.get("contact") or "").strip()
@@ -757,21 +812,22 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
             RETURNING id
         """, int(tg_id), name, niche, contact, json.dumps(form))
 
+    # Journey: miniapp_submit (important)
     await db_log_event(
         event="miniapp_submit",
         source="miniapp",
         tg_id=int(tg_id),
         lead_id=int(lead_id),
-        meta={"name": name, "niche": niche, "contact": contact},
+        meta={"name": name, "niche": niche},
     )
 
+    # ✅ Single confirmation only here (as you requested)
     final_name = (name or "").strip() or "друг"
     final_niche = (niche or "").strip() or "—"
-
     user_msg = (
-        f"Привет, {final_name}! 👋\n"
-        f"Спасибо, я записала вашу нишу: {final_niche}\n"
-        f"Опиши задачу в 1 фразе — помогу."
+        f"Спасибо, {final_name}! ✅\n"
+        f"Зафиксировала: ниша — {final_niche}.\n"
+        f"Всё верно? Если нужно исправить — просто напишите как правильно (имя и ниша одним сообщением)."
     )
 
     try:
@@ -783,6 +839,7 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "leadId": lead_id, "deeplink": deeplink})
 
 
+# Website leads endpoint (optional)
 async def api_leads_website(request: web.Request) -> web.Response:
     if request.method == "OPTIONS":
         return web.Response(status=204)
@@ -811,12 +868,13 @@ async def api_leads_website(request: web.Request) -> web.Response:
             RETURNING id
         """, name, niche, tg or contact, json.dumps(payload))
 
+    # journey pending submit (no tg_id yet)
     await db_log_event(
         event="website_submit",
         source="website",
         tg_id=None,
         lead_id=int(lead_id),
-        meta={"name": name, "niche": niche, "contact": tg or contact},
+        meta={"name": name, "niche": niche},
     )
 
     deeplink = f"https://t.me/{BOT_USERNAME}?start=lead_{lead_id}"
@@ -851,6 +909,7 @@ async def main_async():
     DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     print("✅ DB pool ready", flush=True)
 
+    # ensure tables for history + journey
     async with DB_POOL.acquire() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
