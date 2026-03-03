@@ -18,7 +18,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ============================================================
 # ✅ BUILD TAG (check deploy via /version)
 # ============================================================
-BUILD_TAG = "MINIAPP_V10_POLITE_YOU_FUNNEL_AFTER_FORM"
+BUILD_TAG = "MINIAPP_V11_SINGLE_WELCOME_NO_DOUBLE_REPLY"
 print(f"### BUILD: {BUILD_TAG} ###", flush=True)
 
 # ============================================================
@@ -692,16 +692,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reason)
         return
 
-    # log incoming
     await db_log_message(int(user.id), "in", text)
     await db_log_event(event="message", source="bot", tg_id=int(user.id), meta={"text_preview": text[:160]})
 
-    # ===========================
-    # ✅ Post-form polite follow-up:
-    # If user declines, we gently ask name (confirm TG name) and niche.
-    # ===========================
+    # ✅ Prevent double greeting: first-ever message -> send welcome and STOP
+    if not context.user_data.get("introduced"):
+        context.user_data["introduced"] = True
+        context.user_data["history"] = []
+        await update.message.reply_text(WELCOME_TEXT)
+        return
+
+    # If user declines after form — ask name/niche politely
     if is_decline(text):
-        # If name not confirmed yet — confirm Telegram first_name as name
         if not context.user_data.get("name_confirmed"):
             tg_first = (user.first_name or "").strip()
             if tg_first:
@@ -712,24 +714,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data["awaiting_name_confirm"] = True
                 return
 
-        # If niche not known — ask niche
         current_niche = await db_get_user_niche(int(user.id))
         if not current_niche:
             await update.message.reply_text("Хорошо. Тогда уточню один момент: в какой отрасли Вы работаете? (1–2 слова)")
             context.user_data["awaiting_niche"] = True
             return
 
-        # Everything known — finish politely
         await update.message.reply_text("Хорошо, спасибо! Если появятся вопросы — напишите в любой момент 😊")
         return
 
-    # --- waiting name confirm (да/нет) ---
+    # waiting name confirm (да/нет)
     if context.user_data.get("awaiting_name_confirm"):
         low = text.lower()
         if low in ("да", "ага", "ок", "yes", "y"):
             context.user_data["name_confirmed"] = True
             context.user_data["awaiting_name_confirm"] = False
-            # Next: niche if missing
             current_niche = await db_get_user_niche(int(user.id))
             if not current_niche:
                 await update.message.reply_text("Спасибо! И ещё один вопрос: в какой отрасли Вы работаете? (1–2 слова)")
@@ -745,7 +744,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Подскажите, пожалуйста, просто «да» или «нет».")
         return
 
-    # --- waiting name manual input ---
+    # waiting name manual
     if context.user_data.get("awaiting_name_manual"):
         nm = text.strip()
         if len(nm) >= 2:
@@ -762,7 +761,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Напишите, пожалуйста, имя (минимум 2 символа).")
         return
 
-    # --- waiting niche ---
+    # waiting niche
     if context.user_data.get("awaiting_niche"):
         n = text.strip()
         if len(n) >= 2:
@@ -774,14 +773,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Напишите, пожалуйста, отрасль/нишу (1–2 слова).")
         return
 
-    # ===========================
-    # Continue normal flow with Gemini
-    # ===========================
-    if not context.user_data.get("introduced"):
-        context.user_data["introduced"] = True
-        context.user_data["history"] = []
-        await update.message.reply_text(WELCOME_TEXT)
-
+    # Gemini normal flow
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     except Exception:
