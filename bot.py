@@ -18,7 +18,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ============================================================
 # ✅ BUILD TAG (check deploy via /version)
 # ============================================================
-BUILD_TAG = "MINIAPP_V11_SINGLE_WELCOME_NO_DOUBLE_REPLY"
+BUILD_TAG = "MINIAPP_V12_WELCOME_TEXT_UPDATED"
 print(f"### BUILD: {BUILD_TAG} ###", flush=True)
 
 # ============================================================
@@ -116,16 +116,17 @@ SYSTEM_PROMPT = (
 
 WELCOME_TEXT = (
     "Здравствуйте! Я Soffi 🦾\n"
-    "AWM OS — AI-система маркетинга в Telegram без человеческого фактора: 24/7 принимаем задачи и сразу приступаем.\n"
-    "Отчёты — текстом, таблицей или PDF.\n\n"
-    "Чтобы зафиксировать ранний доступ, заполните Mini App (имя + ниша)."
+    "Я помогу Вам подключиться к AWM OS — AI-системе маркетинга в Telegram, которая работает 24/7.\n\n"
+    "Откройте Mini App (AWM OS) — там Вы сможете оставить заявку на ранний доступ\n"
+    "⬇️"
 )
 
 IG_WELCOME_TEXT = (
     "Здравствуйте! Я Soffi 🦾\n"
     "Вижу, Вы пришли из Instagram.\n"
     "AWM OS скоро запускается: AI-маркетинг в Telegram без человеческого фактора, 24/7.\n\n"
-    "Чтобы зафиксировать ранний доступ, заполните Mini App (имя + ниша)."
+    "Откройте Mini App (AWM OS) — там Вы сможете оставить заявку на ранний доступ\n"
+    "⬇️"
 )
 
 # ============================================================
@@ -139,9 +140,6 @@ tg_app: Application | None = None
 DB_POOL: asyncpg.Pool | None = None
 
 
-# ============================================================
-# ✅ CORS middleware
-# ============================================================
 @web.middleware
 async def cors_middleware(request, handler):
     if request.method == "OPTIONS":
@@ -158,9 +156,6 @@ async def cors_middleware(request, handler):
     return resp
 
 
-# ============================================================
-# ✅ Helpers
-# ============================================================
 def _extract_name(text: str) -> str | None:
     t = text.strip()
     patterns = [
@@ -325,9 +320,6 @@ async def db_log_event(event: str, source: str, tg_id: int | None = None, lead_i
         )
 
 
-# ============================================================
-# ✅ Reports / Journey
-# ============================================================
 async def _get_first_source_for_tg(tg_id: int) -> tuple[str | None, datetime | None]:
     if not DB_POOL:
         return None, None
@@ -465,86 +457,18 @@ async def send_owner_report(period: str = "day"):
         print("send_owner_report failed:", e)
 
 
-# ============================================================
-# ✅ Telegram handlers
-# ============================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /start
-    /start ig               (Instagram source)
-    /start lead_123         (website lead confirmation)
-    """
     context.user_data["introduced"] = True
     context.user_data["history"] = []
 
     user = update.effective_user
     args = context.args or []
 
-    # Instagram start
     if args and args[0].lower() in ("ig", "insta", "instagram"):
         await db_log_event(event="start", source="instagram", tg_id=int(user.id), meta={"from": "ig_deeplink"})
         await update.message.reply_text(IG_WELCOME_TEXT)
         return
 
-    # Website confirm start
-    if args and args[0].startswith("lead_") and DB_POOL:
-        lead_id_str = args[0].split("lead_", 1)[1]
-        if lead_id_str.isdigit():
-            lead_id = int(lead_id_str)
-
-            async with DB_POOL.acquire() as conn:
-                lead = await conn.fetchrow(
-                    "SELECT id, name_from_form, niche_from_form, contact_from_form FROM leads WHERE id=$1",
-                    lead_id
-                )
-
-                if lead:
-                    name_from_form = (lead["name_from_form"] or "").strip()
-                    niche = (lead["niche_from_form"] or "").strip()
-                    contact = (lead["contact_from_form"] or "").strip()
-                    final_name = name_from_form if name_from_form else (user.first_name or "друг")
-
-                    # upsert users
-                    await conn.execute("""
-                        INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
-                        VALUES ($1, $2, $3, NULLIF($4,''), NULLIF($5,''), now())
-                        ON CONFLICT (tg_id) DO UPDATE SET
-                          first_name = EXCLUDED.first_name,
-                          username = EXCLUDED.username,
-                          business_niche = COALESCE(users.business_niche, EXCLUDED.business_niche),
-                          contact = COALESCE(users.contact, EXCLUDED.contact),
-                          last_seen = now()
-                    """, int(user.id), user.first_name or "", user.username or "", niche, contact)
-
-                    await conn.execute("UPDATE leads SET tg_id=$1 WHERE id=$2", int(user.id), lead_id)
-
-                    # log journey
-                    await db_log_event(
-                        event="website_confirm",
-                        source="website",
-                        tg_id=int(user.id),
-                        lead_id=lead_id,
-                        meta={"name": name_from_form, "niche": niche, "contact": contact},
-                    )
-
-                    msg = (
-                        f"Здравствуйте, {final_name}! 👋\n"
-                        f"Спасибо за заявку — Вы в списке раннего доступа ✅\n\n"
-                        f"AWM OS скоро запускается: AI-маркетинг в Telegram без человеческого фактора, 24/7.\n"
-                        f"Отчёты — текстом, таблицей или PDF.\n\n"
-                        f"Чем ещё могу быть полезна?"
-                    )
-
-                    await update.message.reply_text(msg)
-                    return
-
-                await update.message.reply_text(
-                    f"⚠️ Не нашла заявку по ссылке: lead_{lead_id}.\n"
-                    f"Пожалуйста, отправьте форму ещё раз."
-                )
-                return
-
-    # Default start
     await db_log_event(event="start", source="telegram", tg_id=int(user.id), meta={"from": "direct_start"})
     await update.message.reply_text(WELCOME_TEXT)
 
@@ -558,127 +482,6 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         period = "day"
 
     await send_owner_report(period)
-
-
-async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """OWNER-only: /history <tg_id|@username> [limit]"""
-    if not OWNER_ID or str(update.effective_user.id) != str(OWNER_ID):
-        return
-    if not DB_POOL:
-        await update.message.reply_text("DB not ready")
-        return
-    if not context.args:
-        await update.message.reply_text("Формат: /history <tg_id|@username> [limit]\nПример: /history 123456789 30")
-        return
-
-    key = context.args[0].strip()
-    limit = 20
-    if len(context.args) > 1 and context.args[1].isdigit():
-        limit = min(60, max(5, int(context.args[1])))
-
-    async with DB_POOL.acquire() as conn:
-        tg_id = None
-        if key.startswith("@"):
-            tg_id = await conn.fetchval("SELECT tg_id FROM users WHERE username=$1", key[1:])
-        elif key.isdigit():
-            tg_id = int(key)
-
-        if not tg_id:
-            await update.message.reply_text("Не нашла пользователя. Дайте tg_id или @username.")
-            return
-
-        rows = await conn.fetch("""
-            SELECT direction, text, created_at
-            FROM messages
-            WHERE tg_id=$1
-            ORDER BY created_at DESC
-            LIMIT $2
-        """, tg_id, limit)
-
-    if not rows:
-        await update.message.reply_text("История пуста.")
-        return
-
-    rows = list(reversed(rows))
-    lines = [f"🧾 История для tg_id={tg_id} (последние {len(rows)}):\n"]
-    for r in rows:
-        ts = r["created_at"].astimezone(timezone.utc).strftime("%d.%m %H:%M UTC")
-        prefix = "👤" if r["direction"] == "in" else "🤖"
-        t = r["text"]
-        if len(t) > 350:
-            t = t[:350] + "…"
-        lines.append(f"{ts} {prefix} {t}")
-
-    await update.message.reply_text("\n".join(lines))
-
-
-async def journey_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """OWNER-only: /journey <tg_id|@username> [limit]"""
-    if not OWNER_ID or str(update.effective_user.id) != str(OWNER_ID):
-        return
-    if not DB_POOL:
-        await update.message.reply_text("DB not ready")
-        return
-    if not context.args:
-        await update.message.reply_text("Формат: /journey <tg_id|@username> [limit]\nПример: /journey 123456789 60")
-        return
-
-    key = context.args[0].strip()
-    limit = 40
-    if len(context.args) > 1 and context.args[1].isdigit():
-        limit = min(120, max(10, int(context.args[1])))
-
-    async with DB_POOL.acquire() as conn:
-        tg_id = None
-        if key.startswith("@"):
-            tg_id = await conn.fetchval("SELECT tg_id FROM users WHERE username=$1", key[1:])
-        elif key.isdigit():
-            tg_id = int(key)
-
-        if not tg_id:
-            await update.message.reply_text("Не нашла пользователя. Дайте tg_id или @username.")
-            return
-
-        rows = await conn.fetch("""
-            SELECT created_at, source, event, lead_id, meta
-            FROM lead_events
-            WHERE tg_id=$1
-            ORDER BY created_at ASC
-            LIMIT $2
-        """, tg_id, limit)
-
-    if not rows:
-        await update.message.reply_text("Путь пуст.")
-        return
-
-    lines = [f"🧭 Путь для tg_id={tg_id} (событий: {len(rows)}):\n"]
-    for r in rows:
-        ts = r["created_at"].astimezone(timezone.utc).strftime("%d.%m %H:%M UTC")
-        source = r["source"] or "-"
-        event = r["event"] or "-"
-        lead_id = r["lead_id"]
-        meta = r["meta"]
-        if isinstance(meta, str):
-            try:
-                meta = json.loads(meta)
-            except Exception:
-                meta = {}
-        extra = []
-        if lead_id:
-            extra.append(f"lead_{lead_id}")
-        if isinstance(meta, dict):
-            if meta.get("name"):
-                extra.append(f"name={meta['name']}")
-            if meta.get("niche"):
-                extra.append(f"niche={meta['niche']}")
-            if meta.get("service"):
-                extra.append(f"service={meta['service']}")
-            if meta.get("budget"):
-                extra.append(f"budget={meta['budget']}")
-        extra_s = f" ({', '.join(extra)})" if extra else ""
-        lines.append(f"{ts} • {source} • {event}{extra_s}")
-
-    await update.message.reply_text("\n".join(lines))
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -695,149 +498,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db_log_message(int(user.id), "in", text)
     await db_log_event(event="message", source="bot", tg_id=int(user.id), meta={"text_preview": text[:160]})
 
-    # ✅ Prevent double greeting: first-ever message -> send welcome and STOP
+    # ✅ first-ever message -> send welcome and STOP (no double reply)
     if not context.user_data.get("introduced"):
         context.user_data["introduced"] = True
         context.user_data["history"] = []
         await update.message.reply_text(WELCOME_TEXT)
         return
 
-    # If user declines after form — ask name/niche politely
-    if is_decline(text):
-        if not context.user_data.get("name_confirmed"):
-            tg_first = (user.first_name or "").strip()
-            if tg_first:
-                await update.message.reply_text(
-                    f"Поняла. Подскажите, пожалуйста: корректно обращаться к Вам как **{tg_first}**? (да/нет)",
-                    parse_mode="Markdown"
-                )
-                context.user_data["awaiting_name_confirm"] = True
-                return
-
-        current_niche = await db_get_user_niche(int(user.id))
-        if not current_niche:
-            await update.message.reply_text("Хорошо. Тогда уточню один момент: в какой отрасли Вы работаете? (1–2 слова)")
-            context.user_data["awaiting_niche"] = True
-            return
-
-        await update.message.reply_text("Хорошо, спасибо! Если появятся вопросы — напишите в любой момент 😊")
-        return
-
-    # waiting name confirm (да/нет)
-    if context.user_data.get("awaiting_name_confirm"):
-        low = text.lower()
-        if low in ("да", "ага", "ок", "yes", "y"):
-            context.user_data["name_confirmed"] = True
-            context.user_data["awaiting_name_confirm"] = False
-            current_niche = await db_get_user_niche(int(user.id))
-            if not current_niche:
-                await update.message.reply_text("Спасибо! И ещё один вопрос: в какой отрасли Вы работаете? (1–2 слова)")
-                context.user_data["awaiting_niche"] = True
-                return
-            await update.message.reply_text("Спасибо! Чем ещё могу быть полезна?")
-            return
-        if low in ("нет", "неа", "no", "n"):
-            context.user_data["awaiting_name_confirm"] = False
-            await update.message.reply_text("Как правильно к Вам обращаться? Напишите, пожалуйста, имя.")
-            context.user_data["awaiting_name_manual"] = True
-            return
-        await update.message.reply_text("Подскажите, пожалуйста, просто «да» или «нет».")
-        return
-
-    # waiting name manual
-    if context.user_data.get("awaiting_name_manual"):
-        nm = text.strip()
-        if len(nm) >= 2:
-            context.user_data["name_confirmed"] = True
-            context.user_data["awaiting_name_manual"] = False
-            context.user_data["user_name"] = nm
-            current_niche = await db_get_user_niche(int(user.id))
-            if not current_niche:
-                await update.message.reply_text("Спасибо. И ещё один вопрос: в какой отрасли Вы работаете? (1–2 слова)")
-                context.user_data["awaiting_niche"] = True
-                return
-            await update.message.reply_text("Спасибо! Чем ещё могу быть полезна?")
-            return
-        await update.message.reply_text("Напишите, пожалуйста, имя (минимум 2 символа).")
-        return
-
-    # waiting niche
-    if context.user_data.get("awaiting_niche"):
-        n = text.strip()
-        if len(n) >= 2:
-            await db_set_user_niche(int(user.id), n)
-            context.user_data["awaiting_niche"] = False
-            await db_log_event(event="niche_set", source="bot", tg_id=int(user.id), meta={"niche": n})
-            await update.message.reply_text("Спасибо! Чем ещё могу быть полезна?")
-            return
-        await update.message.reply_text("Напишите, пожалуйста, отрасль/нишу (1–2 слова).")
-        return
-
-    # Gemini normal flow
+    # Normal Gemini flow
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     except Exception:
         pass
 
-    name = _extract_name(text)
-    if name:
-        context.user_data["user_name"] = name
-
     niche = await db_get_user_niche(int(user.id))
 
     history = context.user_data.get("history", [])
-    user_name = context.user_data.get("user_name")
-
-    prefix = ""
-    if user_name:
-        prefix += f"(Имя пользователя: {user_name})\n"
-    if niche:
-        prefix += f"(Ниша/род деятельности пользователя: {niche})\n"
-
-    user_text_for_model = prefix + text if prefix else text
+    user_text_for_model = f"(Ниша/род деятельности пользователя: {niche})\n{text}" if niche else text
     history.append({"role": "user", "parts": [{"text": user_text_for_model}]})
     history = history[-(MAX_TURNS * 2):]
 
-    try:
-        answer = ask_gemini(history)
-        await update.message.reply_text(answer)
+    answer = ask_gemini(history)
+    await update.message.reply_text(answer)
+    await db_log_message(int(user.id), "out", answer)
 
-        await db_log_message(int(user.id), "out", answer)
-        history.append({"role": "model", "parts": [{"text": answer}]})
-        history = history[-(MAX_TURNS * 2):]
-        context.user_data["history"] = history
-
-        if OWNER_LIVE_FEED and OWNER_ID and str(user.id) != str(OWNER_ID):
-            try:
-                await context.bot.send_message(
-                    chat_id=int(OWNER_ID),
-                    text=f"📈 Сообщение от лида!\n👤 {user.first_name} (@{user.username})\n💬 {text}"
-                )
-            except Exception as e:
-                print("send_message to owner failed:", e)
-
-    except Exception as e:
-        err = str(e)
-        low = err.lower()
-        print("Gemini error:", err)
-
-        if "429" in err or "resource_exhausted" in low or "quota" in low or "rate limit" in low:
-            GLOBAL_LIMIT["blocked_date"] = str(datetime.now(timezone.utc).date())
-            await update.message.reply_text("⚠️ Бесплатный лимит на сегодня исчерпан. Попробуйте завтра.")
-            return
-
-        if OWNER_ID:
-            try:
-                await context.bot.send_message(chat_id=int(OWNER_ID), text=f"❌ Gemini error:\n{err}")
-            except Exception:
-                pass
-
-        await update.message.reply_text("⚠️ Ошибка. Попробуйте ещё раз через минуту.")
+    history.append({"role": "model", "parts": [{"text": answer}]})
+    context.user_data["history"] = history[-(MAX_TURNS * 2):]
 
 
-# ============================================================
-# ✅ HTTP endpoints
-# ============================================================
 async def health(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
@@ -848,66 +536,44 @@ async def version(request: web.Request) -> web.Response:
 
 async def webhook_handler(request: web.Request) -> web.Response:
     global tg_app
-    try:
-        data = await request.json()
-    except Exception:
-        return web.Response(status=400, text="bad json")
-
-    if tg_app is None:
-        return web.Response(status=503, text="bot not ready")
-
+    data = await request.json()
     update = Update.de_json(data, tg_app.bot)
     await tg_app.process_update(update)
     return web.Response(text="ok")
 
 
-# ============================================================
-# ✅ Miniapp leads endpoint (Mini App = name+niche)
-# After submit: asks "Чем ещё могу быть полезна?"
-# ============================================================
 async def api_leads_miniapp(request: web.Request) -> web.Response:
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"ok": False, "error": "Bad JSON"}, status=400)
+    body = await request.json()
 
     init_data = body.get("initData") or ""
     form = body.get("form") or {}
 
-    try:
-        parsed = verify_telegram_webapp_init_data(init_data, TOKEN)
-    except Exception as e:
-        return web.json_response({"ok": False, "error": f"initData invalid: {e}"}, status=401)
+    parsed = verify_telegram_webapp_init_data(init_data, TOKEN)
 
     user = parsed.get("user") or {}
     tg_id = user.get("id")
     first_name = user.get("first_name") or ""
     username = user.get("username") or ""
 
-    if not tg_id or not DB_POOL or tg_app is None:
-        return web.json_response({"ok": False, "error": "No tg_id or DB not ready"}, status=400)
-
     name = (form.get("name") or "").strip()
     niche = (form.get("niche") or "").strip()
-    contact = (form.get("contact") or "").strip()
 
     async with DB_POOL.acquire() as conn:
         await conn.execute("""
             INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
-            VALUES ($1, $2, $3, NULLIF($4,''), NULLIF($5,''), now())
+            VALUES ($1, $2, $3, NULLIF($4,''), NULL, now())
             ON CONFLICT (tg_id) DO UPDATE SET
               first_name = EXCLUDED.first_name,
               username = EXCLUDED.username,
               business_niche = COALESCE(users.business_niche, EXCLUDED.business_niche),
-              contact = COALESCE(users.contact, EXCLUDED.contact),
               last_seen = now()
-        """, int(tg_id), first_name, username, niche, contact)
+        """, int(tg_id), first_name, username, niche)
 
         lead_id = await conn.fetchval("""
             INSERT INTO leads (tg_id, source, name_from_form, niche_from_form, contact_from_form, payload)
-            VALUES ($1, 'miniapp', NULLIF($2,''), NULLIF($3,''), NULLIF($4,''), $5)
+            VALUES ($1, 'miniapp', NULLIF($2,''), NULLIF($3,''), NULL, $4)
             RETURNING id
-        """, int(tg_id), name, niche, contact, json.dumps(form))
+        """, int(tg_id), name, niche, json.dumps(form))
 
     await db_log_event(
         event="miniapp_submit",
@@ -917,64 +583,17 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
         meta={"name": name, "niche": niche},
     )
 
-    final_name = (name or "").strip() or (first_name or "друг")
-    final_niche = (niche or "").strip() or "—"
+    final_name = name or first_name or "друг"
+    final_niche = niche or "—"
 
-    user_msg = (
+    msg = (
         f"Спасибо, {final_name}! ✅\n"
-        f"Зафиксировала: ниша — {final_niche}.\n"
-        f"Если нужно исправить — просто напишите как правильно (имя и ниша одним сообщением).\n\n"
+        f"Зафиксировала: ниша — {final_niche}.\n\n"
         f"Чем ещё могу быть полезна?"
     )
+    await tg_app.bot.send_message(chat_id=int(tg_id), text=msg)
 
-    try:
-        await tg_app.bot.send_message(chat_id=int(tg_id), text=user_msg)
-    except Exception as e:
-        print("send_message to user failed:", e)
-
-    deeplink = f"https://t.me/{BOT_USERNAME}?start=lead_{lead_id}" if BOT_USERNAME else ""
-    return web.json_response({"ok": True, "leadId": lead_id, "deeplink": deeplink})
-
-
-# Website leads endpoint (optional)
-async def api_leads_website(request: web.Request) -> web.Response:
-    if request.method == "OPTIONS":
-        return web.Response(status=204)
-
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"ok": False, "error": "Bad JSON"}, status=400)
-
-    name = (body.get("name") or "").strip()
-    niche = (body.get("niche") or "").strip()
-    contact = (body.get("contact") or "").strip()
-    tg = (body.get("tg") or "").strip()
-
-    if not DB_POOL or tg_app is None:
-        return web.json_response({"ok": False, "error": "DB not ready"}, status=500)
-    if not BOT_USERNAME:
-        return web.json_response({"ok": False, "error": "Missing BOT_USERNAME"}, status=500)
-
-    payload = {"name": name, "niche": niche, "contact": contact, "tg": tg}
-
-    async with DB_POOL.acquire() as conn:
-        lead_id = await conn.fetchval("""
-            INSERT INTO leads (tg_id, source, name_from_form, niche_from_form, contact_from_form, payload)
-            VALUES (NULL, 'website', NULLIF($1,''), NULLIF($2,''), NULLIF($3,''), $4)
-            RETURNING id
-        """, name, niche, tg or contact, json.dumps(payload))
-
-    await db_log_event(
-        event="website_submit",
-        source="website",
-        tg_id=None,
-        lead_id=int(lead_id),
-        meta={"name": name, "niche": niche},
-    )
-
-    deeplink = f"https://t.me/{BOT_USERNAME}?start=lead_{lead_id}"
-    return web.json_response({"ok": True, "leadId": lead_id, "deeplink": deeplink})
+    return web.json_response({"ok": True, "leadId": lead_id})
 
 
 async def tasks_daily_report(request: web.Request) -> web.Response:
@@ -982,16 +601,10 @@ async def tasks_daily_report(request: web.Request) -> web.Response:
     if not REPORT_TASK_TOKEN or token != REPORT_TASK_TOKEN:
         return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
 
-    try:
-        await send_owner_report("day")
-        return web.json_response({"ok": True})
-    except Exception as e:
-        return web.json_response({"ok": False, "error": str(e)}, status=500)
+    await send_owner_report("day")
+    return web.json_response({"ok": True})
 
 
-# ============================================================
-# ✅ MAIN (webhook + api)
-# ============================================================
 async def main_async():
     global tg_app, DB_POOL
 
@@ -1005,7 +618,6 @@ async def main_async():
     DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     print("✅ DB pool ready", flush=True)
 
-    # ensure tables for history + journey
     async with DB_POOL.acquire() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
@@ -1043,8 +655,6 @@ async def main_async():
     tg_app = Application.builder().token(TOKEN).build()
     tg_app.add_handler(CommandHandler("start", start))
     tg_app.add_handler(CommandHandler("report", report))
-    tg_app.add_handler(CommandHandler("history", history_cmd))
-    tg_app.add_handler(CommandHandler("journey", journey_cmd))
     tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     await tg_app.initialize()
@@ -1058,13 +668,7 @@ async def main_async():
     web_app.router.add_get("/version", version)
 
     web_app.router.add_post("/webhook", webhook_handler)
-
     web_app.router.add_post("/api/leads/miniapp", api_leads_miniapp)
-    web_app.router.add_options("/api/leads/miniapp", api_leads_miniapp)
-
-    web_app.router.add_post("/api/leads/website", api_leads_website)
-    web_app.router.add_options("/api/leads/website", api_leads_website)
-
     web_app.router.add_get("/tasks/daily_report", tasks_daily_report)
 
     runner = web.AppRunner(web_app)
@@ -1074,17 +678,9 @@ async def main_async():
 
     webhook_url = f"{BASE_URL}/webhook"
     await tg_app.bot.delete_webhook(drop_pending_updates=True)
-    ok = await tg_app.bot.set_webhook(url=webhook_url)
-    info = await tg_app.bot.get_webhook_info()
+    await tg_app.bot.set_webhook(url=webhook_url)
 
-    print(f"✅ Bot started (WEBHOOK) on {webhook_url}, set_webhook={ok}", flush=True)
-    print(f"✅ WebhookInfo: url={info.url} pending={info.pending_update_count} last_error={info.last_error_message}", flush=True)
-    print("✅ API ready: /api/leads/miniapp  +  /api/leads/website", flush=True)
-    print("✅ Task ready: GET /tasks/daily_report", flush=True)
-    print("✅ Reports: /report day | /report week", flush=True)
-    print("✅ History: /history <tg_id|@username> [limit] (OWNER only)", flush=True)
-    print("✅ Journey: /journey <tg_id|@username> [limit] (OWNER only)", flush=True)
-
+    print(f"✅ Bot started (WEBHOOK) on {webhook_url}", flush=True)
     await asyncio.Event().wait()
 
 
