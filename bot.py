@@ -18,7 +18,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ============================================================
 # ✅ BUILD TAG (check deploy via /version)
 # ============================================================
-BUILD_TAG = "MINIAPP_V6_DAILY_REPORT_AND_HISTORY"
+BUILD_TAG = "MINIAPP_V7_IG_SOURCE"
 print(f"### BUILD: {BUILD_TAG} ###", flush=True)
 
 # ============================================================
@@ -68,6 +68,12 @@ WELCOME_TEXT = (
     "Привет! Я Soffi 🦾\n"
     "Помогаю понять, как ИИ может ускорить маркетинг и продажи.\n"
     "Для начала: чем занимаетесь и в какой нише/городе?"
+)
+
+IG_WELCOME_TEXT = (
+    "Привет! Я Soffi 🦾\n"
+    "Вижу, вы пришли из Instagram.\n\n"
+    "Что сейчас приоритетнее: лиды, контент или реклама?"
 )
 
 # ============================================================
@@ -261,13 +267,62 @@ async def send_owner_report(period: str = "day"):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /start
-    /start lead_123  (подтверждение лидов с сайта)
+    /start ig               (источник Instagram)
+    /start lead_123         (подтверждение лидов с сайта)
     """
     context.user_data["introduced"] = True
     context.user_data["history"] = []
 
     user = update.effective_user
     args = context.args or []
+
+    # ---------- (IG) Лид пришёл из Instagram ----------
+    if args and args[0].lower() in ("ig", "insta", "instagram"):
+        tg_id = int(user.id)
+        first_name = user.first_name or ""
+        username = user.username or ""
+        lead_id = None
+
+        if DB_POOL:
+            async with DB_POOL.acquire() as conn:
+                # upsert users
+                await conn.execute("""
+                    INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
+                    VALUES ($1, $2, $3, NULL, NULL, now())
+                    ON CONFLICT (tg_id) DO UPDATE SET
+                      first_name = EXCLUDED.first_name,
+                      username = EXCLUDED.username,
+                      last_seen = now()
+                """, tg_id, first_name, username)
+
+                # insert lead source=instagram (best effort)
+                try:
+                    lead_id = await conn.fetchval("""
+                        INSERT INTO leads (tg_id, source, name_from_form, niche_from_form, contact_from_form, payload)
+                        VALUES ($1, 'instagram', NULL, NULL, NULL, $2)
+                        RETURNING id
+                    """, tg_id, json.dumps({"source": "instagram"}))
+                except Exception as e:
+                    print("instagram lead insert failed:", e)
+
+        # notify owner
+        if OWNER_ID:
+            try:
+                extra = f"\n🆔 Lead ID: {lead_id}" if lead_id else ""
+                await context.bot.send_message(
+                    chat_id=int(OWNER_ID),
+                    text=(
+                        "📥 Новый лид из Instagram\n"
+                        f"👤 {first_name or '-'} (@{username or '-'}) id={tg_id}"
+                        f"{extra}"
+                    )
+                )
+            except Exception as e:
+                print("send ig lead to owner failed:", e)
+
+        # show in bot chat that the lead came from Instagram
+        await update.message.reply_text(IG_WELCOME_TEXT)
+        return
 
     # ---------- (A) Подтверждение лида с сайта ----------
     if args and args[0].startswith("lead_") and DB_POOL:
@@ -338,7 +393,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # отчёт по запросу — только владельцу
     if not OWNER_ID or str(update.effective_user.id) != str(OWNER_ID):
         return
 
@@ -412,7 +466,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reason)
         return
 
-    # log incoming
     await db_log_message(int(user.id), "in", text)
 
     if not context.user_data.get("introduced"):
@@ -449,14 +502,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         answer = ask_gemini(history)
         await update.message.reply_text(answer)
 
-        # log outgoing
         await db_log_message(int(user.id), "out", answer)
 
         history.append({"role": "model", "parts": [{"text": answer}]})
         history = history[-(MAX_TURNS * 2):]
         context.user_data["history"] = history
 
-        # ✅ live feed владельцу отключён по умолчанию
         if OWNER_LIVE_FEED and OWNER_ID and str(user.id) != str(OWNER_ID):
             try:
                 await context.bot.send_message(
@@ -572,7 +623,6 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     except Exception as e:
         print("send_message to user failed:", e)
 
-    # owner получает лид (как и раньше)
     if OWNER_ID:
         try:
             await tg_app.bot.send_message(
@@ -669,7 +719,7 @@ async def main_async():
     DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     print("✅ DB pool ready", flush=True)
 
-    # создаём таблицу сообщений (если нет) — чтобы /history работал
+    # ensure messages table for /history
     async with DB_POOL.acquire() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
