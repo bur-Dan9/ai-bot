@@ -18,7 +18,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ============================================================
 # ✅ BUILD TAG (check deploy via /version)
 # ============================================================
-BUILD_TAG = "MINIAPP_V15_FORGET_CMD_AND_ORDER_BY_ID"
+BUILD_TAG = "MINIAPP_V16_NO_REPEAT_MINIAPP_FORGOT_AND_MINIAPP_FLAG"
 print(f"### BUILD: {BUILD_TAG} ###", flush=True)
 
 # ============================================================
@@ -33,7 +33,6 @@ BOT_USERNAME = os.environ.get("BOT_USERNAME")  # bot username without "@"
 REPORT_TASK_TOKEN = os.environ.get("REPORT_TASK_TOKEN")
 BASE_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://ai-bot-a3aj.onrender.com").rstrip("/")
 
-# Optional: if =1 then owner receives live feed of user messages (default OFF)
 OWNER_LIVE_FEED = os.environ.get("OWNER_LIVE_FEED", "0") == "1"
 
 # ============================================================
@@ -54,6 +53,7 @@ SYSTEM_PROMPT = (
     "Ты говоришь естественно и тепло, как умный помощник, без канцелярита и без давления.\n"
     "Ты можешь отвечать на отвлечённые вопросы и поддерживать лёгкий диалог, но всегда мягко возвращаешь разговор к воронке.\n"
     "ВСЕГДА общайся уважительно и обращайся к пользователю на «Вы».\n\n"
+
     "Контекст продукта:\n"
     "AWM OS — AI-система маркетинга в Telegram без человеческого фактора. Работает 24/7: принимает задачи и сразу приступает.\n"
     "Есть два направления:\n"
@@ -61,29 +61,32 @@ SYSTEM_PROMPT = (
     "Отчёты в Telegram: текст, таблица или PDF.\n"
     "2) AI Разработка: сайт/лендинг + Telegram Mini App + интеграция с ботом (лиды/отчёты).\n"
     "Сервис скоро запускается: мы на финальной стадии разработки.\n\n"
+
     "Услуги (ровно 4):\n"
     "A) AI-Маркетинг Автопилот — подписка (ежемесячно), полное сопровождение 24/7.\n"
     "B) Разработка экосистемы — разово: сайт + Telegram Mini App под ключ.\n"
     "C) Глубокий AI-аудит — разово: диагностика воронки и точек роста.\n"
-    "D) Content & Ads Turbo — подписка (ежемесячно): запуск и контроль трафика без человеческого фактора, "
-    "24/7 анализ креативов и оптимизация на данных.\n\n"
+    "D) Content & Ads Turbo — подписка (ежемесячно): запуск и контроль трафика без человеческого фактора, 24/7 оптимизация на данных.\n\n"
+
     "Главная цель диалога:\n"
     "Собрать максимум данных и довести до заявки.\n"
     "Данные, которые нужно собрать:\n"
-    "- Имя и ниша (если НЕ сайт — через Mini App; если сайт lead_123 — уже есть, Mini App не нужен)\n"
+    "- Имя и ниша\n"
     "- Что человек хочет получить (1–2 предложения)\n"
     "- Какая услуга лучше подходит (ты предлагаешь сама)\n"
     "- Комфортный бюджет (после согласования услуги):\n"
     "  • для подписки (Автопилот, Turbo) — диапазон в месяц\n"
     "  • для разовой услуги (Экосистема, Аудит) — диапазон разово\n\n"
+
     "Правила воронки:\n"
-    "1) Если лид НЕ с сайта: сначала направь в Mini App (имя+ниша). После Mini App сделай ОДНО подтверждение: имя/ниша верно?\n"
-    "2) Если лид с сайта (lead_123): Mini App пропускаем.\n"
-    "3) Ты НЕ называешь цены и НЕ говоришь тарифы. Никогда.\n"
-    "4) Ты НЕ обещаешь конкретные финансовые результаты.\n"
-    "5) Ты анализируешь текст пользователя и сама предлагаешь 1 наиболее подходящую услугу.\n"
-    "6) Бюджет спрашиваешь ТОЛЬКО после того, как услуга согласована.\n"
-    "7) После бюджета: говоришь, что мы завершаем разработку и уведомим о старте/условиях в этом чате.\n\n"
+    "0) Если Mini App уже заполнен (в сообщении есть «Mini App уже заполнен: ДА») — НИКОГДА больше не проси заполнить Mini App.\n"
+    "1) Если Mini App НЕ заполнен: сначала направь в Mini App (имя+ниша). После Mini App сделай одно подтверждение: имя/ниша верно?\n"
+    "2) Ты НЕ называешь цены и НЕ говоришь тарифы. Никогда.\n"
+    "3) Ты НЕ обещаешь конкретные финансовые результаты.\n"
+    "4) Ты анализируешь текст пользователя и сама предлагаешь 1 наиболее подходящую услугу.\n"
+    "5) Бюджет спрашиваешь ТОЛЬКО после того, как услуга согласована.\n"
+    "6) После бюджета: говоришь, что мы завершаем разработку и уведомим о старте/условиях в этом чате.\n\n"
+
     "Формат ответа:\n"
     "- 1–4 строки\n"
     "- максимум 1–2 вопроса за раз\n"
@@ -109,7 +112,6 @@ IG_WELCOME_TEXT = (
 # ✅ LIMITS / MEMORY
 # ============================================================
 MAX_TURNS = 12
-
 MAX_REQUESTS_PER_DAY = 200
 GLOBAL_LIMIT = {"date": None, "count": 0, "blocked_date": None}
 
@@ -117,6 +119,9 @@ tg_app: Application | None = None
 DB_POOL: asyncpg.Pool | None = None
 
 
+# ============================================================
+# ✅ CORS middleware
+# ============================================================
 @web.middleware
 async def cors_middleware(request, handler):
     if request.method == "OPTIONS":
@@ -133,21 +138,9 @@ async def cors_middleware(request, handler):
     return resp
 
 
-def _extract_name(text: str) -> str | None:
-    t = text.strip()
-    patterns = [
-        r"\bменя\s+зовут\s+([A-Za-zА-Яа-яЁё\-]{2,30})\b",
-        r"\bя\s+([A-Za-zА-Яа-яЁё\-]{2,30})\b",
-        r"\bmy\s+name\s+is\s+([A-Za-z\-]{2,30})\b",
-        r"\bi\s+am\s+([A-Za-z\-]{2,30})\b",
-    ]
-    for p in patterns:
-        m = re.search(p, t, flags=re.IGNORECASE)
-        if m:
-            return m.group(1)
-    return None
-
-
+# ============================================================
+# ✅ Helpers
+# ============================================================
 def ask_gemini(contents: list[dict]) -> str:
     if not GOOGLE_API_KEY:
         raise RuntimeError("Missing GOOGLE_API_KEY")
@@ -230,6 +223,9 @@ def verify_telegram_webapp_init_data(init_data: str, bot_token: str) -> dict:
     return data
 
 
+# ============================================================
+# ✅ DB helpers
+# ============================================================
 async def db_get_user_niche(tg_id: int) -> str | None:
     if not DB_POOL:
         return None
@@ -239,7 +235,7 @@ async def db_get_user_niche(tg_id: int) -> str | None:
 
 async def db_get_latest_miniapp_profile(tg_id: int) -> tuple[str | None, str | None]:
     """
-    Самый простой вариант: берём последнюю заявку miniapp по id (без created_at).
+    Самый надёжный вариант: последняя miniapp-заявка по id (не зависит от created_at).
     """
     if not DB_POOL:
         return None, None
@@ -298,36 +294,31 @@ async def send_owner_report(period: str = "day"):
     async with DB_POOL.acquire() as conn:
         ev_rows = await conn.fetch(
             f"""
-            SELECT tg_id, lead_id, event, source, meta, created_at
+            SELECT tg_id, event, source, created_at
             FROM lead_events
             WHERE created_at >= now() - interval '{interval}'
             ORDER BY created_at ASC
             """
         )
 
-    by_tg: dict[int, list[dict]] = {}
+    by_tg: dict[int, list[str]] = {}
     for r in ev_rows:
-        tg_id = r["tg_id"]
-        if tg_id is None:
+        if r["tg_id"] is None:
             continue
-        by_tg.setdefault(int(tg_id), []).append(
-            {"event": r["event"], "source": r["source"], "meta": r["meta"], "created_at": r["created_at"]}
-        )
+        by_tg.setdefault(int(r["tg_id"]), []).append(r["source"] or "-")
 
-    lines: list[str] = []
-    lines.append(f"📊 Отчёт за {period}")
-    lines.append(f"— пользователей с событиями: {len(by_tg)}")
-    lines.append("")
-    for tg_id, events in list(by_tg.items())[:60]:
-        chain = " → ".join([e["source"] for e in events if e.get("source")]) or "-"
+    lines = [f"📊 Отчёт за {period}", f"— пользователей с событиями: {len(by_tg)}", ""]
+    for tg_id, chain in list(by_tg.items())[:60]:
         lines.append(f"👤 tg_id={tg_id}")
-        lines.append(f"   путь: {chain}")
+        lines.append(f"   путь: {' → '.join(chain)}")
         lines.append("")
 
-    lines.append("🛠 Команды владельца:")
-    lines.append("• /report day — отчёт за сутки")
-    lines.append("• /report week — отчёт за 7 дней")
-    lines.append("• /forget <tg_id> — полностью забыть пользователя (и БД, и память)")
+    lines += [
+        "🛠 Команды владельца:",
+        "• /report day — отчёт за сутки",
+        "• /report week — отчёт за 7 дней",
+        "• /forget <tg_id> — забыть пользователя (БД + память)",
+    ]
 
     try:
         await tg_app.bot.send_message(chat_id=int(OWNER_ID), text="\n".join(lines))
@@ -336,7 +327,7 @@ async def send_owner_report(period: str = "day"):
 
 
 # ============================================================
-# ✅ OWNER command: /forget <tg_id>
+# ✅ OWNER: /forget <tg_id>
 # ============================================================
 async def forget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not OWNER_ID or str(update.effective_user.id) != str(OWNER_ID):
@@ -357,14 +348,13 @@ async def forget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("DB not ready")
         return
 
-    # 1) Чистим БД (всё, что даёт “память”)
     async with DB_POOL.acquire() as conn:
         await conn.execute("DELETE FROM messages WHERE tg_id=$1", tg_id)
         await conn.execute("DELETE FROM lead_events WHERE tg_id=$1", tg_id)
-        await conn.execute("DELETE FROM leads WHERE tg_id=$1", tg_id)     # ВАЖНО: иначе будет подтягивать из leads
+        await conn.execute("DELETE FROM leads WHERE tg_id=$1", tg_id)   # важно!
         await conn.execute("DELETE FROM users WHERE tg_id=$1", tg_id)
 
-    # 2) Чистим оперативную память python-telegram-bot (history/introduced/etc)
+    # чистим оперативную память PTB (history/introduced)
     try:
         ud = context.application.user_data.get(tg_id)
         if ud is not None:
@@ -379,6 +369,7 @@ async def forget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ✅ Telegram handlers
 # ============================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # start всегда сбрасывает локальную историю диалога
     context.user_data["introduced"] = True
     context.user_data["history"] = []
 
@@ -438,7 +429,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db_log_message(int(user.id), "in", text)
     await db_log_event(event="message", source="bot", tg_id=int(user.id), meta={"text_preview": text[:160]})
 
-    # ✅ first-ever message -> если Mini App уже заполнен — НЕ направляем туда
+    # Если это самый первый message в этом процессе — показываем правильный entry (и выходим)
     if not context.user_data.get("introduced"):
         context.user_data["introduced"] = True
         context.user_data["history"] = []
@@ -455,20 +446,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(WELCOME_TEXT)
         return
 
-    # Normal Gemini flow
+    # ===== Gemini flow =====
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     except Exception:
         pass
 
-    niche = await db_get_user_niche(int(user.id))
+    # ✅ ключ: передаём Gemini факт заполнения Mini App
+    name_form, niche_form = await db_get_latest_miniapp_profile(int(user.id))
+    niche_db = await db_get_user_niche(int(user.id))
+
+    prefix = ""
+    if niche_form:
+        prefix += f"(Mini App уже заполнен: ДА. Имя из формы: {name_form or '-'}, Ниша из формы: {niche_form})\n"
+    else:
+        prefix += "(Mini App уже заполнен: НЕТ)\n"
+
+    if niche_db:
+        prefix += f"(Ниша/род деятельности пользователя: {niche_db})\n"
 
     history = context.user_data.get("history", [])
-    user_text_for_model = f"(Ниша/род деятельности пользователя: {niche})\n{text}" if niche else text
-    history.append({"role": "user", "parts": [{"text": user_text_for_model}]})
+    history.append({"role": "user", "parts": [{"text": prefix + text}]})
     history = history[-(MAX_TURNS * 2):]
 
-    answer = ask_gemini(history)
+    try:
+        answer = ask_gemini(history)
+    except Exception as e:
+        err = str(e)
+        low = err.lower()
+        print("Gemini error:", err)
+
+        if "429" in err or "quota" in low or "rate limit" in low:
+            GLOBAL_LIMIT["blocked_date"] = str(datetime.now(timezone.utc).date())
+            await update.message.reply_text("⚠️ Бесплатный лимит на сегодня исчерпан. Попробуйте завтра.")
+            return
+
+        await update.message.reply_text("⚠️ Ошибка. Попробуйте ещё раз через минуту.")
+        return
+
     await update.message.reply_text(answer)
     await db_log_message(int(user.id), "out", answer)
 
@@ -511,6 +526,9 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
     name = (form.get("name") or "").strip()
     niche = (form.get("niche") or "").strip()
 
+    if not DB_POOL or tg_app is None:
+        return web.json_response({"ok": False, "error": "DB/Bot not ready"}, status=500)
+
     async with DB_POOL.acquire() as conn:
         await conn.execute("""
             INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
@@ -544,7 +562,10 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
         f"Зафиксировала: ниша — {final_niche}.\n\n"
         "Чем ещё могу быть полезна?"
     )
-    await tg_app.bot.send_message(chat_id=int(tg_id), text=msg)
+    try:
+        await tg_app.bot.send_message(chat_id=int(tg_id), text=msg)
+    except Exception as e:
+        print("send_message to user failed:", e)
 
     return web.json_response({"ok": True, "leadId": lead_id})
 
@@ -574,6 +595,7 @@ async def main_async():
     DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     print("✅ DB pool ready", flush=True)
 
+    # создаём служебные таблицы (не трогаем leads/users — они у тебя уже есть)
     async with DB_POOL.acquire() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
@@ -638,6 +660,10 @@ async def main_async():
     await tg_app.bot.set_webhook(url=webhook_url)
 
     print(f"✅ Bot started (WEBHOOK) on {webhook_url}", flush=True)
+    print("✅ /version ready", flush=True)
+    print("✅ /api/leads/miniapp ready", flush=True)
+    print("✅ /tasks/daily_report ready", flush=True)
+
     await asyncio.Event().wait()
 
 
