@@ -17,7 +17,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ============================================================
 # ✅ BUILD TAG (check deploy via /version)
 # ============================================================
-BUILD_TAG = "MINIAPP_V17_FUNNEL_MARKETING_VS_DEV_NO_PRICE_HINTS"
+BUILD_TAG = "MINIAPP_V18_MARKETING_SPLIT_IG_VS_ONLY_ADS"
 print(f"### BUILD: {BUILD_TAG} ###", flush=True)
 
 # ============================================================
@@ -61,10 +61,10 @@ SYSTEM_PROMPT = (
     "B) Разработка (разово): сайт/лендинг + Telegram Mini App + интеграции (лиды/отчёты в боте).\n\n"
 
     "Услуги (ровно 4):\n"
-    "1) AI-Маркетинг Автопилот — подписка (ведение Instagram под ключ + рекомендации/аналитика; при необходимости реклама).\n"
-    "2) Content & Ads Turbo — подписка (если Instagram вести НЕ нужно; фокус на рекламе/трафике/креативах и цифрах).\n"
-    "3) Разработка экосистемы — разово (сайт + Mini App + интеграции).\n"
-    "4) Глубокий AI-аудит — разово (диагностика воронок и точки роста).\n\n"
+    "1) AI-Маркетинг Автопилот — подписка: ведение Instagram под ключ (контент/сторис/постинг) + реклама входит при необходимости.\n"
+    "2) Content & Ads Turbo — подписка: ТОЛЬКО реклама/трафик/креативы и оптимизация на данных. Без ведения Instagram.\n"
+    "3) Разработка экосистемы — разово: сайт + Telegram Mini App + интеграции.\n"
+    "4) Глубокий AI-аудит — разово: диагностика воронок и точек роста.\n\n"
 
     "КЛЮЧЕВОЕ ПРАВИЛО:\n"
     "Если в контексте есть «Mini App уже заполнен: ДА» — НИКОГДА больше не проси заполнить Mini App.\n\n"
@@ -72,18 +72,21 @@ SYSTEM_PROMPT = (
     "Воронка (строго):\n"
     "Шаг 1: Развилка направления.\n"
     "Спроси: «Что актуальнее: 1) Маркетинг 2) Разработка?»\n\n"
+
     "Шаг 2А (если Маркетинг):\n"
-    "Уточни: «Нужно вести Instagram под ключ или вести не нужно — важнее реклама/заявки/продажи?»\n"
-    "Если Instagram вести НЕ нужно → Turbo.\n"
-    "Если Instagram вести нужно → Автопилот.\n"
-    "После выбора уточни 1 вопрос про цель (что важнее: заявки/продажи/трафик/стабильность цифр).\n"
+    "Спроси без слова «важнее»: «Нужно вести Instagram под ключ или нужна только реклама (без ведения Instagram)?»\n"
+    "Если «только реклама» → Turbo.\n"
+    "Если «вести Instagram» → Автопилот (в него реклама тоже может входить).\n"
+    "После выбора уточни 1 вопрос про цель (заявки/продажи/трафик/стабильность по цифрам).\n"
     "Потом зафиксируй выбранную услугу и спроси бюджет: «На какую сумму Вы рассчитываете в месяц?»\n\n"
+
     "Шаг 2B (если Разработка):\n"
     "Уточни: «Нужно: сайт/лендинг, Mini App, или оба под ключ?»\n"
     "Уточни цель: «заявки / оплата-бронь / воронка в Telegram».\n"
     "Обычно предлагай «Разработка экосистемы».\n"
     "Если человек просит разбор/почему не работает → предложи «Глубокий AI-аудит».\n"
     "После выбора спроси бюджет: «На какую сумму Вы рассчитываете разово?»\n\n"
+
     "Шаг 3: Финальное сообщение (после того как бюджет получен):\n"
     "«Отлично, зафиксировала ✅ Мы на финальной стадии разработки и готовим запуск.\n"
     "Как только будет старт и условия — я напишу Вам здесь первой.\n\n"
@@ -108,17 +111,10 @@ IG_WELCOME_TEXT = (
     "⬇️"
 )
 
-# После заполнения Mini App — стартуем воронку (а не «чем могу помочь»)
 POST_MINIAPP_TEXT = (
     "Подскажите, что для Вас сейчас актуальнее:\n"
     "1) Маркетинг (клиенты/реклама/контент/отчёты)\n"
     "2) Разработка (сайт/лендинг + Telegram Mini App + интеграции)"
-)
-
-FINAL_MESSAGE_TEMPLATE = (
-    "Отлично, зафиксировала ✅ Мы на финальной стадии разработки и готовим запуск.\n"
-    "Как только будет старт и условия — я напишу Вам здесь первой.\n\n"
-    "Я могу быть Вам ещё полезной?"
 )
 
 # ============================================================
@@ -363,7 +359,7 @@ async def forget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with DB_POOL.acquire() as conn:
         await conn.execute("DELETE FROM messages WHERE tg_id=$1", tg_id)
         await conn.execute("DELETE FROM lead_events WHERE tg_id=$1", tg_id)
-        await conn.execute("DELETE FROM leads WHERE tg_id=$1", tg_id)   # важно!
+        await conn.execute("DELETE FROM leads WHERE tg_id=$1", tg_id)
         await conn.execute("DELETE FROM users WHERE tg_id=$1", tg_id)
 
     try:
@@ -380,7 +376,6 @@ async def forget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ✅ Telegram handlers
 # ============================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # /start сбрасывает локальную память диалога
     context.user_data["introduced"] = True
     context.user_data["history"] = []
 
@@ -440,7 +435,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db_log_message(int(user.id), "in", text)
     await db_log_event(event="message", source="bot", tg_id=int(user.id), meta={"text_preview": text[:160]})
 
-    # Первое сообщение после "чистого" контекста: если миниап уже есть — сразу воронка, иначе welcome
     if not context.user_data.get("introduced"):
         context.user_data["introduced"] = True
         context.user_data["history"] = []
@@ -463,7 +457,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    # ✅ Передаём модели факт заполнения Mini App (чтобы НЕ просила повторно)
+    # ✅ передаём модели факт заполнения Mini App
     name_form, niche_form = await db_get_latest_miniapp_profile(int(user.id))
     niche_db = await db_get_user_niche(int(user.id))
 
@@ -522,10 +516,6 @@ async def webhook_handler(request: web.Request) -> web.Response:
 
 
 async def api_leads_miniapp(request: web.Request) -> web.Response:
-    """
-    Принимаем initData + form{name,niche,contact} из Mini App.
-    Отвечаем пользователю в боте и запускаем воронку (маркетинг/разработка).
-    """
     try:
         body = await request.json()
     except Exception:
@@ -619,7 +609,6 @@ async def main_async():
     DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     print("✅ DB pool ready", flush=True)
 
-    # служебные таблицы
     async with DB_POOL.acquire() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
