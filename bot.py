@@ -1,6 +1,5 @@
 import os
 import asyncio
-import re
 import requests
 import json
 import hmac
@@ -18,7 +17,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ============================================================
 # ✅ BUILD TAG (check deploy via /version)
 # ============================================================
-BUILD_TAG = "MINIAPP_V16_NO_REPEAT_MINIAPP_FORGOT_AND_MINIAPP_FLAG"
+BUILD_TAG = "MINIAPP_V17_FUNNEL_MARKETING_VS_DEV_NO_PRICE_HINTS"
 print(f"### BUILD: {BUILD_TAG} ###", flush=True)
 
 # ============================================================
@@ -50,47 +49,49 @@ MODEL = "gemini-2.5-flash"
 
 SYSTEM_PROMPT = (
     "Ты — Soffi, дружелюбный и общительный AI-ассистент AWM OS.\n"
-    "Ты говоришь естественно и тепло, как умный помощник, без канцелярита и без давления.\n"
-    "Ты можешь отвечать на отвлечённые вопросы и поддерживать лёгкий диалог, но всегда мягко возвращаешь разговор к воронке.\n"
-    "ВСЕГДА общайся уважительно и обращайся к пользователю на «Вы».\n\n"
+    "Говори естественно, уверенно и уважительно, всегда на «Вы».\n"
+    "Ты отвечаешь на вопросы по теме и на отвлечённые вопросы, но мягко возвращаешь к воронке.\n"
+    "НЕ называй цены/тарифы/диапазоны/примеры сумм. Только спрашивай: «на какую сумму Вы рассчитываете».\n\n"
 
     "Контекст продукта:\n"
-    "AWM OS — AI-система маркетинга в Telegram без человеческого фактора. Работает 24/7: принимает задачи и сразу приступает.\n"
-    "Есть два направления:\n"
-    "1) AI Маркетинг (9 этапов): старт цели → аудит → аудитория → конкуренты → креативы → SMM → реклама → аналитика → масштаб.\n"
-    "Отчёты в Telegram: текст, таблица или PDF.\n"
-    "2) AI Разработка: сайт/лендинг + Telegram Mini App + интеграция с ботом (лиды/отчёты).\n"
-    "Сервис скоро запускается: мы на финальной стадии разработки.\n\n"
+    "AWM OS — AI-система маркетинга в Telegram без человеческого фактора. 24/7 принимает задачи и сразу приступает.\n"
+    "Отчёты — в Telegram: текст, таблица или PDF.\n"
+    "Два направления:\n"
+    "A) AI-маркетинг (подписка): контент/реклама/аналитика/оптимизация.\n"
+    "B) Разработка (разово): сайт/лендинг + Telegram Mini App + интеграции (лиды/отчёты в боте).\n\n"
 
     "Услуги (ровно 4):\n"
-    "A) AI-Маркетинг Автопилот — подписка (ежемесячно), полное сопровождение 24/7.\n"
-    "B) Разработка экосистемы — разово: сайт + Telegram Mini App под ключ.\n"
-    "C) Глубокий AI-аудит — разово: диагностика воронки и точек роста.\n"
-    "D) Content & Ads Turbo — подписка (ежемесячно): запуск и контроль трафика без человеческого фактора, 24/7 оптимизация на данных.\n\n"
+    "1) AI-Маркетинг Автопилот — подписка (ведение Instagram под ключ + рекомендации/аналитика; при необходимости реклама).\n"
+    "2) Content & Ads Turbo — подписка (если Instagram вести НЕ нужно; фокус на рекламе/трафике/креативах и цифрах).\n"
+    "3) Разработка экосистемы — разово (сайт + Mini App + интеграции).\n"
+    "4) Глубокий AI-аудит — разово (диагностика воронок и точки роста).\n\n"
 
-    "Главная цель диалога:\n"
-    "Собрать максимум данных и довести до заявки.\n"
-    "Данные, которые нужно собрать:\n"
-    "- Имя и ниша\n"
-    "- Что человек хочет получить (1–2 предложения)\n"
-    "- Какая услуга лучше подходит (ты предлагаешь сама)\n"
-    "- Комфортный бюджет (после согласования услуги):\n"
-    "  • для подписки (Автопилот, Turbo) — диапазон в месяц\n"
-    "  • для разовой услуги (Экосистема, Аудит) — диапазон разово\n\n"
+    "КЛЮЧЕВОЕ ПРАВИЛО:\n"
+    "Если в контексте есть «Mini App уже заполнен: ДА» — НИКОГДА больше не проси заполнить Mini App.\n\n"
 
-    "Правила воронки:\n"
-    "0) Если Mini App уже заполнен (в сообщении есть «Mini App уже заполнен: ДА») — НИКОГДА больше не проси заполнить Mini App.\n"
-    "1) Если Mini App НЕ заполнен: сначала направь в Mini App (имя+ниша). После Mini App сделай одно подтверждение: имя/ниша верно?\n"
-    "2) Ты НЕ называешь цены и НЕ говоришь тарифы. Никогда.\n"
-    "3) Ты НЕ обещаешь конкретные финансовые результаты.\n"
-    "4) Ты анализируешь текст пользователя и сама предлагаешь 1 наиболее подходящую услугу.\n"
-    "5) Бюджет спрашиваешь ТОЛЬКО после того, как услуга согласована.\n"
-    "6) После бюджета: говоришь, что мы завершаем разработку и уведомим о старте/условиях в этом чате.\n\n"
+    "Воронка (строго):\n"
+    "Шаг 1: Развилка направления.\n"
+    "Спроси: «Что актуальнее: 1) Маркетинг 2) Разработка?»\n\n"
+    "Шаг 2А (если Маркетинг):\n"
+    "Уточни: «Нужно вести Instagram под ключ или вести не нужно — важнее реклама/заявки/продажи?»\n"
+    "Если Instagram вести НЕ нужно → Turbo.\n"
+    "Если Instagram вести нужно → Автопилот.\n"
+    "После выбора уточни 1 вопрос про цель (что важнее: заявки/продажи/трафик/стабильность цифр).\n"
+    "Потом зафиксируй выбранную услугу и спроси бюджет: «На какую сумму Вы рассчитываете в месяц?»\n\n"
+    "Шаг 2B (если Разработка):\n"
+    "Уточни: «Нужно: сайт/лендинг, Mini App, или оба под ключ?»\n"
+    "Уточни цель: «заявки / оплата-бронь / воронка в Telegram».\n"
+    "Обычно предлагай «Разработка экосистемы».\n"
+    "Если человек просит разбор/почему не работает → предложи «Глубокий AI-аудит».\n"
+    "После выбора спроси бюджет: «На какую сумму Вы рассчитываете разово?»\n\n"
+    "Шаг 3: Финальное сообщение (после того как бюджет получен):\n"
+    "«Отлично, зафиксировала ✅ Мы на финальной стадии разработки и готовим запуск.\n"
+    "Как только будет старт и условия — я напишу Вам здесь первой.\n\n"
+    "Я могу быть Вам ещё полезной?»\n\n"
 
-    "Формат ответа:\n"
-    "- 1–4 строки\n"
-    "- максимум 1–2 вопроса за раз\n"
-    "- дружелюбно, уверенно, без давления\n"
+    "Формат ответов:\n"
+    "— 1–6 строк, без воды.\n"
+    "— максимум 1–2 вопроса за раз.\n"
 )
 
 WELCOME_TEXT = (
@@ -102,10 +103,22 @@ WELCOME_TEXT = (
 
 IG_WELCOME_TEXT = (
     "Здравствуйте! Я Soffi 🦾\n"
-    "Вижу, Вы пришли из Instagram.\n"
-    "AWM OS скоро запускается: AI-маркетинг в Telegram без человеческого фактора, 24/7.\n\n"
+    "Вижу, Вы пришли из Instagram.\n\n"
     "Откройте Mini App (AWM OS) — там Вы сможете оставить заявку на ранний доступ\n"
     "⬇️"
+)
+
+# После заполнения Mini App — стартуем воронку (а не «чем могу помочь»)
+POST_MINIAPP_TEXT = (
+    "Подскажите, что для Вас сейчас актуальнее:\n"
+    "1) Маркетинг (клиенты/реклама/контент/отчёты)\n"
+    "2) Разработка (сайт/лендинг + Telegram Mini App + интеграции)"
+)
+
+FINAL_MESSAGE_TEMPLATE = (
+    "Отлично, зафиксировала ✅ Мы на финальной стадии разработки и готовим запуск.\n"
+    "Как только будет старт и условия — я напишу Вам здесь первой.\n\n"
+    "Я могу быть Вам ещё полезной?"
 )
 
 # ============================================================
@@ -235,7 +248,7 @@ async def db_get_user_niche(tg_id: int) -> str | None:
 
 async def db_get_latest_miniapp_profile(tg_id: int) -> tuple[str | None, str | None]:
     """
-    Самый надёжный вариант: последняя miniapp-заявка по id (не зависит от created_at).
+    Надёжно: последняя miniapp-заявка по id (не зависит от created_at).
     """
     if not DB_POOL:
         return None, None
@@ -290,11 +303,10 @@ async def send_owner_report(period: str = "day"):
         return
 
     interval = "1 day" if period == "day" else "7 days"
-
     async with DB_POOL.acquire() as conn:
         ev_rows = await conn.fetch(
             f"""
-            SELECT tg_id, event, source, created_at
+            SELECT tg_id, source, created_at
             FROM lead_events
             WHERE created_at >= now() - interval '{interval}'
             ORDER BY created_at ASC
@@ -354,7 +366,6 @@ async def forget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await conn.execute("DELETE FROM leads WHERE tg_id=$1", tg_id)   # важно!
         await conn.execute("DELETE FROM users WHERE tg_id=$1", tg_id)
 
-    # чистим оперативную память PTB (history/introduced)
     try:
         ud = context.application.user_data.get(tg_id)
         if ud is not None:
@@ -369,7 +380,7 @@ async def forget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ✅ Telegram handlers
 # ============================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # start всегда сбрасывает локальную историю диалога
+    # /start сбрасывает локальную память диалога
     context.user_data["introduced"] = True
     context.user_data["history"] = []
 
@@ -384,7 +395,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"Спасибо, {final_name}! ✅\n"
                 f"Зафиксировала: ниша — {niche_form}.\n\n"
-                "Чем ещё могу быть полезна?"
+                f"{POST_MINIAPP_TEXT}"
             )
         else:
             await update.message.reply_text(IG_WELCOME_TEXT)
@@ -398,7 +409,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"Спасибо, {final_name}! ✅\n"
             f"Зафиксировала: ниша — {niche_form}.\n\n"
-            "Чем ещё могу быть полезна?"
+            f"{POST_MINIAPP_TEXT}"
         )
     else:
         await update.message.reply_text(WELCOME_TEXT)
@@ -429,7 +440,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db_log_message(int(user.id), "in", text)
     await db_log_event(event="message", source="bot", tg_id=int(user.id), meta={"text_preview": text[:160]})
 
-    # Если это самый первый message в этом процессе — показываем правильный entry (и выходим)
+    # Первое сообщение после "чистого" контекста: если миниап уже есть — сразу воронка, иначе welcome
     if not context.user_data.get("introduced"):
         context.user_data["introduced"] = True
         context.user_data["history"] = []
@@ -440,7 +451,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"Спасибо, {final_name}! ✅\n"
                 f"Зафиксировала: ниша — {niche_form}.\n\n"
-                "Чем ещё могу быть полезна?"
+                f"{POST_MINIAPP_TEXT}"
             )
         else:
             await update.message.reply_text(WELCOME_TEXT)
@@ -452,7 +463,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    # ✅ ключ: передаём Gemini факт заполнения Mini App
+    # ✅ Передаём модели факт заполнения Mini App (чтобы НЕ просила повторно)
     name_form, niche_form = await db_get_latest_miniapp_profile(int(user.id))
     niche_db = await db_get_user_niche(int(user.id))
 
@@ -511,12 +522,22 @@ async def webhook_handler(request: web.Request) -> web.Response:
 
 
 async def api_leads_miniapp(request: web.Request) -> web.Response:
-    body = await request.json()
+    """
+    Принимаем initData + form{name,niche,contact} из Mini App.
+    Отвечаем пользователю в боте и запускаем воронку (маркетинг/разработка).
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "Bad JSON"}, status=400)
 
     init_data = body.get("initData") or ""
     form = body.get("form") or {}
 
-    parsed = verify_telegram_webapp_init_data(init_data, TOKEN)
+    try:
+        parsed = verify_telegram_webapp_init_data(init_data, TOKEN)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": f"initData invalid: {e}"}, status=401)
 
     user = parsed.get("user") or {}
     tg_id = user.get("id")
@@ -525,26 +546,28 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
 
     name = (form.get("name") or "").strip()
     niche = (form.get("niche") or "").strip()
+    contact = (form.get("contact") or "").strip()
 
-    if not DB_POOL or tg_app is None:
-        return web.json_response({"ok": False, "error": "DB/Bot not ready"}, status=500)
+    if not tg_id or not DB_POOL or tg_app is None:
+        return web.json_response({"ok": False, "error": "No tg_id or DB/Bot not ready"}, status=500)
 
     async with DB_POOL.acquire() as conn:
         await conn.execute("""
             INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
-            VALUES ($1, $2, $3, NULLIF($4,''), NULL, now())
+            VALUES ($1, $2, $3, NULLIF($4,''), NULLIF($5,''), now())
             ON CONFLICT (tg_id) DO UPDATE SET
               first_name = EXCLUDED.first_name,
               username = EXCLUDED.username,
               business_niche = COALESCE(users.business_niche, EXCLUDED.business_niche),
+              contact = COALESCE(users.contact, EXCLUDED.contact),
               last_seen = now()
-        """, int(tg_id), first_name, username, niche)
+        """, int(tg_id), first_name, username, niche, contact)
 
         lead_id = await conn.fetchval("""
             INSERT INTO leads (tg_id, source, name_from_form, niche_from_form, contact_from_form, payload)
-            VALUES ($1, 'miniapp', NULLIF($2,''), NULLIF($3,''), NULL, $4)
+            VALUES ($1, 'miniapp', NULLIF($2,''), NULLIF($3,''), NULLIF($4,''), $5)
             RETURNING id
-        """, int(tg_id), name, niche, json.dumps(form))
+        """, int(tg_id), name, niche, contact, json.dumps(form))
 
     await db_log_event(
         event="miniapp_submit",
@@ -554,14 +577,15 @@ async def api_leads_miniapp(request: web.Request) -> web.Response:
         meta={"name": name, "niche": niche},
     )
 
-    final_name = name or first_name or "друг"
-    final_niche = niche or "—"
+    final_name = (name or first_name or "друг").strip()
+    final_niche = (niche or "—").strip()
 
     msg = (
         f"Спасибо, {final_name}! ✅\n"
         f"Зафиксировала: ниша — {final_niche}.\n\n"
-        "Чем ещё могу быть полезна?"
+        f"{POST_MINIAPP_TEXT}"
     )
+
     try:
         await tg_app.bot.send_message(chat_id=int(tg_id), text=msg)
     except Exception as e:
@@ -595,7 +619,7 @@ async def main_async():
     DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     print("✅ DB pool ready", flush=True)
 
-    # создаём служебные таблицы (не трогаем leads/users — они у тебя уже есть)
+    # служебные таблицы
     async with DB_POOL.acquire() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
