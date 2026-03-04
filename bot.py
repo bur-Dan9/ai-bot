@@ -18,7 +18,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ============================================================
 # ✅ BUILD TAG (check deploy via /version)
 # ============================================================
-BUILD_TAG = "MINIAPP_V12_WELCOME_TEXT_UPDATED"
+BUILD_TAG = "MINIAPP_V13_SKIP_MINIAPP_IF_ALREADY_SUBMITTED"
 print(f"### BUILD: {BUILD_TAG} ###", flush=True)
 
 # ============================================================
@@ -54,7 +54,6 @@ SYSTEM_PROMPT = (
     "Ты говоришь естественно и тепло, как умный помощник, без канцелярита и без давления.\n"
     "Ты можешь отвечать на отвлечённые вопросы и поддерживать лёгкий диалог, но всегда мягко возвращаешь разговор к воронке.\n"
     "ВСЕГДА общайся уважительно и обращайся к пользователю на «Вы».\n\n"
-
     "Контекст продукта:\n"
     "AWM OS — AI-система маркетинга в Telegram без человеческого фактора. Работает 24/7: принимает задачи и сразу приступает.\n"
     "Есть два направления:\n"
@@ -62,14 +61,12 @@ SYSTEM_PROMPT = (
     "Отчёты в Telegram: текст, таблица или PDF.\n"
     "2) AI Разработка: сайт/лендинг + Telegram Mini App + интеграция с ботом (лиды/отчёты).\n"
     "Сервис скоро запускается: мы на финальной стадии разработки.\n\n"
-
     "Услуги (ровно 4):\n"
     "A) AI-Маркетинг Автопилот — подписка (ежемесячно), полное сопровождение 24/7.\n"
     "B) Разработка экосистемы — разово: сайт + Telegram Mini App под ключ.\n"
     "C) Глубокий AI-аудит — разово: диагностика воронки и точек роста.\n"
     "D) Content & Ads Turbo — подписка (ежемесячно): запуск и контроль трафика без человеческого фактора, "
-    "24/7 анализ креативов и оптимизация на данных (слабое выключаем, сильное усиливаем).\n\n"
-
+    "24/7 анализ креативов и оптимизация на данных.\n\n"
     "Главная цель диалога:\n"
     "Собрать максимум данных и довести до заявки.\n"
     "Данные, которые нужно собрать:\n"
@@ -79,35 +76,14 @@ SYSTEM_PROMPT = (
     "- Комфортный бюджет (после согласования услуги):\n"
     "  • для подписки (Автопилот, Turbo) — диапазон в месяц\n"
     "  • для разовой услуги (Экосистема, Аудит) — диапазон разово\n\n"
-
     "Правила воронки:\n"
     "1) Если лид НЕ с сайта: сначала направь в Mini App (имя+ниша). После Mini App сделай ОДНО подтверждение: имя/ниша верно?\n"
-    "   Если нет — попроси исправить одним сообщением и продолжай дальше.\n"
     "2) Если лид с сайта (lead_123): Mini App пропускаем.\n"
     "3) Ты НЕ называешь цены и НЕ говоришь тарифы. Никогда.\n"
     "4) Ты НЕ обещаешь конкретные финансовые результаты.\n"
     "5) Ты анализируешь текст пользователя и сама предлагаешь 1 наиболее подходящую услугу.\n"
-    "   Затем один раз уточняешь: «Ок фиксирую X или выбрать другой?»\n"
     "6) Бюджет спрашиваешь ТОЛЬКО после того, как услуга согласована.\n"
     "7) После бюджета: говоришь, что мы завершаем разработку и уведомим о старте/условиях в этом чате.\n\n"
-
-    "Как предлагать услугу (по смыслу):\n"
-    "- Если хотят системно ‘под ключ’, контент+реклама+ведение, регулярность → Автопилот.\n"
-    "- Если хотят сайт/лендинг, mini app, интеграцию, инфраструктуру → Экосистема.\n"
-    "- Если не понимают ‘почему не работает’, хотят разбор/диагностику → Глубокий AI-аудит.\n"
-    "- Если нужно усилить рекламу/креативы/трафик, фокус на данных и оптимизация → Turbo.\n\n"
-
-    "Поведение на отвлечённые вопросы:\n"
-    "- Сначала коротко и по делу ответь.\n"
-    "- Потом мягко вернись к шагу воронки одной фразой.\n"
-    "Пример: «Да, могу объяснить. Чтобы зафиксировать заявку на запуск — скажите, что сейчас важнее…»\n\n"
-
-    "Обязательные формулировки (используй по смыслу):\n"
-    "- «Сервис скоро запускается, мы на финальном этапе разработки.»\n"
-    "- «Без человеческого фактора: меньше субъективности, больше решений на данных.»\n"
-    "- «Работаем 24/7: принимаем задачи и сразу приступаем.»\n"
-    "- «Отчёты в Telegram: текст, таблица или PDF.»\n\n"
-
     "Формат ответа:\n"
     "- 1–4 строки\n"
     "- максимум 1–2 вопроса за раз\n"
@@ -169,17 +145,6 @@ def _extract_name(text: str) -> str | None:
         if m:
             return m.group(1)
     return None
-
-
-def is_decline(text: str) -> bool:
-    t = (text or "").strip().lower()
-    if not t:
-        return False
-    patterns = [
-        "не надо", "ничего", "ничем", "пока", "позже", "не сейчас", "нет", "не хочу", "неинтересно",
-        "сам разберусь", "потом", "ок", "ясно", "спасибо", "спс", "всё", "хватит"
-    ]
-    return any(p in t for p in patterns)
 
 
 def ask_gemini(contents: list[dict]) -> str:
@@ -271,23 +236,27 @@ async def db_get_user_niche(tg_id: int) -> str | None:
         return await conn.fetchval("SELECT business_niche FROM users WHERE tg_id=$1", int(tg_id))
 
 
-async def db_set_user_niche(tg_id: int, niche: str):
+async def db_get_latest_miniapp_profile(tg_id: int) -> tuple[str | None, str | None]:
+    """
+    Возвращает (name_from_form, niche_from_form) из последней заявки miniapp для tg_id.
+    Не требует изменений схемы users.
+    """
     if not DB_POOL:
-        return
-    niche = (niche or "").strip()
-    if not niche:
-        return
+        return None, None
     async with DB_POOL.acquire() as conn:
-        await conn.execute(
+        row = await conn.fetchrow(
             """
-            INSERT INTO users (tg_id, first_name, username, business_niche, contact, last_seen)
-            VALUES ($1, '', '', NULLIF($2,''), NULL, now())
-            ON CONFLICT (tg_id) DO UPDATE SET
-              business_niche = COALESCE(NULLIF(users.business_niche,''), EXCLUDED.business_niche),
-              last_seen = now()
+            SELECT name_from_form, niche_from_form
+            FROM leads
+            WHERE tg_id=$1 AND source='miniapp'
+            ORDER BY created_at DESC
+            LIMIT 1
             """,
-            int(tg_id), niche
+            int(tg_id),
         )
+    if not row:
+        return None, None
+    return (row["name_from_form"], row["niche_from_form"])
 
 
 async def db_log_message(tg_id: int, direction: str, text: str):
@@ -320,36 +289,6 @@ async def db_log_event(event: str, source: str, tg_id: int | None = None, lead_i
         )
 
 
-async def _get_first_source_for_tg(tg_id: int) -> tuple[str | None, datetime | None]:
-    if not DB_POOL:
-        return None, None
-    async with DB_POOL.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT source, created_at
-            FROM lead_events
-            WHERE tg_id=$1
-            ORDER BY created_at ASC
-            LIMIT 1
-            """,
-            int(tg_id),
-        )
-    if not row:
-        return None, None
-    return row["source"], row["created_at"]
-
-
-def _compact_chain(events: list[dict]) -> str:
-    srcs: list[str] = []
-    for e in events:
-        s = (e.get("source") or "").strip()
-        if not s:
-            continue
-        if not srcs or srcs[-1] != s:
-            srcs.append(s)
-    return " → ".join(srcs) if srcs else "-"
-
-
 async def send_owner_report(period: str = "day"):
     if not OWNER_ID or not DB_POOL or tg_app is None:
         return
@@ -366,90 +305,28 @@ async def send_owner_report(period: str = "day"):
             """
         )
 
-        pending_web = await conn.fetch(
-            f"""
-            SELECT lead_id, created_at
-            FROM lead_events
-            WHERE tg_id IS NULL
-              AND lead_id IS NOT NULL
-              AND created_at >= now() - interval '{interval}'
-              AND source='website'
-            ORDER BY created_at DESC
-            LIMIT 30
-            """
-        )
-
     by_tg: dict[int, list[dict]] = {}
     for r in ev_rows:
         tg_id = r["tg_id"]
         if tg_id is None:
             continue
         by_tg.setdefault(int(tg_id), []).append(
-            {
-                "event": r["event"],
-                "source": r["source"],
-                "meta": r["meta"],
-                "created_at": r["created_at"],
-                "lead_id": r["lead_id"],
-            }
+            {"event": r["event"], "source": r["source"], "meta": r["meta"], "created_at": r["created_at"]}
         )
 
     lines: list[str] = []
     lines.append(f"📊 Отчёт за {period}")
     lines.append(f"— пользователей с событиями: {len(by_tg)}")
     lines.append("")
-
     for tg_id, events in list(by_tg.items())[:60]:
-        first_source, first_dt = await _get_first_source_for_tg(tg_id)
-        chain = _compact_chain(events)
-
-        name = "-"
-        niche = "-"
-        service = "-"
-        budget = "-"
-
-        for e in reversed(events):
-            meta = e.get("meta") or {}
-            if isinstance(meta, str):
-                try:
-                    meta = json.loads(meta)
-                except Exception:
-                    meta = {}
-            if isinstance(meta, dict):
-                if meta.get("name"):
-                    name = meta["name"]
-                if meta.get("niche"):
-                    niche = meta["niche"]
-                if meta.get("service"):
-                    service = meta["service"]
-                if meta.get("budget"):
-                    budget = meta["budget"]
-            if name != "-" and niche != "-" and service != "-" and budget != "-":
-                break
-
-        dt_s = first_dt.astimezone(timezone.utc).strftime("%d.%m %H:%M UTC") if first_dt else "-"
-        lines.append(f"👤 tg_id={tg_id} | старт: {first_source or '-'} ({dt_s})")
+        chain = " → ".join([e["source"] for e in events if e.get("source")]) or "-"
+        lines.append(f"👤 tg_id={tg_id}")
         lines.append(f"   путь: {chain}")
-        if name != "-" or niche != "-":
-            lines.append(f"   профиль: {name} • {niche}")
-        if service != "-" or budget != "-":
-            lines.append(f"   запрос: {service} • бюджет: {budget}")
-        lines.append("")
-
-    if pending_web:
-        lines.append("⏳ Website лиды без подтверждения (не нажали deep-link):")
-        for r in pending_web[:30]:
-            lead_id = r["lead_id"]
-            dt = r["created_at"].astimezone(timezone.utc).strftime("%d.%m %H:%M UTC")
-            lines.append(f"   lead_{lead_id} • {dt}")
         lines.append("")
 
     lines.append("🛠 Команды владельца:")
     lines.append("• /report day — отчёт за сутки")
     lines.append("• /report week — отчёт за 7 дней")
-    lines.append("• /history <tg_id|@username> [limit] — история сообщений")
-    lines.append("• /journey <tg_id|@username> [limit] — путь источников/событий")
-    lines.append("• OWNER_LIVE_FEED=1 — включить живой поток (опционально)")
 
     try:
         await tg_app.bot.send_message(chat_id=int(OWNER_ID), text="\n".join(lines))
@@ -457,6 +334,9 @@ async def send_owner_report(period: str = "day"):
         print("send_owner_report failed:", e)
 
 
+# ============================================================
+# ✅ Telegram handlers
+# ============================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["introduced"] = True
     context.user_data["history"] = []
@@ -466,11 +346,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if args and args[0].lower() in ("ig", "insta", "instagram"):
         await db_log_event(event="start", source="instagram", tg_id=int(user.id), meta={"from": "ig_deeplink"})
-        await update.message.reply_text(IG_WELCOME_TEXT)
+        # если уже есть заявка miniapp — НЕ отправляем снова в miniapp
+        name_form, niche_form = await db_get_latest_miniapp_profile(int(user.id))
+        if niche_form:
+            final_name = (name_form or user.first_name or "друг").strip()
+            await update.message.reply_text(
+                f"Спасибо, {final_name}! ✅\n"
+                f"Зафиксировала: ниша — {niche_form}.\n\n"
+                "Чем ещё могу быть полезна?"
+            )
+        else:
+            await update.message.reply_text(IG_WELCOME_TEXT)
         return
 
     await db_log_event(event="start", source="telegram", tg_id=int(user.id), meta={"from": "direct_start"})
-    await update.message.reply_text(WELCOME_TEXT)
+
+    # если уже есть заявка miniapp — НЕ отправляем снова в miniapp
+    name_form, niche_form = await db_get_latest_miniapp_profile(int(user.id))
+    if niche_form:
+        final_name = (name_form or user.first_name or "друг").strip()
+        await update.message.reply_text(
+            f"Спасибо, {final_name}! ✅\n"
+            f"Зафиксировала: ниша — {niche_form}.\n\n"
+            "Чем ещё могу быть полезна?"
+        )
+    else:
+        await update.message.reply_text(WELCOME_TEXT)
 
 
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -498,11 +399,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db_log_message(int(user.id), "in", text)
     await db_log_event(event="message", source="bot", tg_id=int(user.id), meta={"text_preview": text[:160]})
 
-    # ✅ first-ever message -> send welcome and STOP (no double reply)
+    # ✅ first-ever message -> если Mini App уже заполнен — НЕ направляем туда
     if not context.user_data.get("introduced"):
         context.user_data["introduced"] = True
         context.user_data["history"] = []
-        await update.message.reply_text(WELCOME_TEXT)
+
+        name_form, niche_form = await db_get_latest_miniapp_profile(int(user.id))
+        if niche_form:
+            final_name = (name_form or user.first_name or "друг").strip()
+            await update.message.reply_text(
+                f"Спасибо, {final_name}! ✅\n"
+                f"Зафиксировала: ниша — {niche_form}.\n\n"
+                "Чем ещё могу быть полезна?"
+            )
+        else:
+            await update.message.reply_text(WELCOME_TEXT)
         return
 
     # Normal Gemini flow
@@ -526,6 +437,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["history"] = history[-(MAX_TURNS * 2):]
 
 
+# ============================================================
+# ✅ HTTP endpoints
+# ============================================================
 async def health(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
@@ -605,6 +519,9 @@ async def tasks_daily_report(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+# ============================================================
+# ✅ MAIN
+# ============================================================
 async def main_async():
     global tg_app, DB_POOL
 
