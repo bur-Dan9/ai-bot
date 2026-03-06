@@ -13,11 +13,12 @@ import asyncpg
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import InputFile
 
 # ============================================================
 # ✅ BUILD TAG (check deploy via /version)
 # ============================================================
-BUILD_TAG = "MINIAPP_V19_POST_MINIAPP_OFFERS_ALL_4_SERVICES"
+BUILD_TAG = "MINIAPP_V20_REELS_SITE_FLOW_WITH_REF_IMAGES"
 print(f"### BUILD: {BUILD_TAG} ###", flush=True)
 
 # ============================================================
@@ -43,7 +44,7 @@ ALLOWED_ORIGINS = {
 }
 
 # ============================================================
-# ✅ GEMINI
+# ✅ GEMINI (fallback for non-scripted)
 # ============================================================
 MODEL = "gemini-2.5-flash"
 
@@ -52,32 +53,16 @@ SYSTEM_PROMPT = (
     "Говори естественно, уверенно и уважительно, всегда на «Вы».\n"
     "Ты отвечаешь на вопросы по теме и на отвлечённые вопросы, но мягко возвращаешь к воронке.\n"
     "НЕ называй цены/тарифы/диапазоны/примеры сумм. Только спрашивай: «на какую сумму Вы рассчитываете».\n\n"
-
     "Контекст продукта:\n"
     "AWM OS — AI-система маркетинга в Telegram без человеческого фактора. 24/7 принимает задачи и сразу приступает.\n"
     "Отчёты — в Telegram: текст, таблица или PDF.\n\n"
-
     "Услуги (ровно 4):\n"
     "1) AI-Маркетинг Автопилот — подписка: ведение Instagram под ключ (контент/сторис/постинг) + реклама при необходимости.\n"
     "2) Content & Ads Turbo — подписка: только реклама/трафик/креативы и оптимизация на данных (без ведения Instagram).\n"
     "3) Разработка экосистемы — разово: сайт + Telegram Mini App + интеграции.\n"
     "4) Глубокий AI-аудит — разово: диагностика воронок и точки роста.\n\n"
-
     "КЛЮЧЕВОЕ ПРАВИЛО:\n"
     "Если в контексте есть «Mini App уже заполнен: ДА» — НИКОГДА больше не проси заполнить Mini App.\n\n"
-
-    "Воронка:\n"
-    "После Mini App предложи выбрать один из 4 вариантов (цифрой) ИЛИ попроси описать цель 1 фразой.\n"
-    "Если пользователь не уверен — подбери услугу сама по смыслу.\n"
-    "После того как услуга выбрана/подобрана — уточни 1 вопрос про цель.\n"
-    "Потом спроси бюджет:\n"
-    "— для подписки (Автопилот/Turbo): «На какую сумму Вы рассчитываете в месяц?»\n"
-    "— для разовой услуги (Экосистема/Аудит): «На какую сумму Вы рассчитываете разово?»\n"
-    "После бюджета отправь финал:\n"
-    "«Отлично, зафиксировала ✅ Мы на финальной стадии разработки и готовим запуск.\n"
-    "Как только будет старт и условия — я напишу Вам здесь первой.\n\n"
-    "Я могу быть Вам ещё полезной?»\n\n"
-
     "Формат ответов:\n"
     "— 1–8 строк, без воды.\n"
     "— максимум 1–2 вопроса за раз.\n"
@@ -97,7 +82,6 @@ IG_WELCOME_TEXT = (
     "⬇️"
 )
 
-# ✅ NEW: показываем все 4 услуги после Mini App
 POST_MINIAPP_TEXT = (
     "Отлично! ✅ Я зафиксировала Вашу нишу.\n\n"
     "Чтобы предложить самое подходящее решение, выберите, что Вам ближе (можно цифрой):\n"
@@ -109,6 +93,15 @@ POST_MINIAPP_TEXT = (
 )
 
 # ============================================================
+# ✅ REELS SITE FLOW SETTINGS
+# ============================================================
+SITE_PUBLISH_URL = "https://coffe-topaz.vercel.app/"
+
+REF_IMAGES = ["ref-1.png", "ref-2.png", "ref-3.png"]  # must be next to bot.py
+
+OK_WORDS = {"ок", "окей", "okay", "ok", "отлично", "супер", "хорошо", "подходит"}
+
+# ============================================================
 # ✅ LIMITS / MEMORY
 # ============================================================
 MAX_TURNS = 12
@@ -117,7 +110,6 @@ GLOBAL_LIMIT = {"date": None, "count": 0, "blocked_date": None}
 
 tg_app: Application | None = None
 DB_POOL: asyncpg.Pool | None = None
-
 
 # ============================================================
 # ✅ CORS middleware
@@ -136,7 +128,6 @@ async def cors_middleware(request, handler):
         resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS, GET"
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Task-Token"
     return resp
-
 
 # ============================================================
 # ✅ Helpers
@@ -223,6 +214,17 @@ def verify_telegram_webapp_init_data(init_data: str, bot_token: str) -> dict:
     return data
 
 
+def _is_ok(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return t in OK_WORDS
+
+
+def _looks_like_link(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return ("http://" in t) or ("https://" in t) or ("dribbble.com" in t)
+
 # ============================================================
 # ✅ DB helpers
 # ============================================================
@@ -234,9 +236,6 @@ async def db_get_user_niche(tg_id: int) -> str | None:
 
 
 async def db_get_latest_miniapp_profile(tg_id: int) -> tuple[str | None, str | None]:
-    """
-    Надёжно: последняя miniapp-заявка по id (не зависит от created_at).
-    """
     if not DB_POOL:
         return None, None
     async with DB_POOL.acquire() as conn:
@@ -284,7 +283,9 @@ async def db_log_event(event: str, source: str, tg_id: int | None = None, lead_i
             json.dumps(meta or {}),
         )
 
-
+# ============================================================
+# ✅ Owner report (unchanged)
+# ============================================================
 async def send_owner_report(period: str = "day"):
     if not OWNER_ID or not DB_POOL or tg_app is None:
         return
@@ -324,7 +325,6 @@ async def send_owner_report(period: str = "day"):
     except Exception as e:
         print("send_owner_report failed:", e)
 
-
 # ============================================================
 # ✅ OWNER: /forget <tg_id>
 # ============================================================
@@ -362,6 +362,234 @@ async def forget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"✅ Готово. Пользователь {tg_id} полностью «забыт».")
 
+# ============================================================
+# ✅ Scripted Reels Site Flow
+# ============================================================
+async def _send_ref_images(bot, chat_id: int):
+    for i, fname in enumerate(REF_IMAGES, start=1):
+        if os.path.exists(fname):
+            with open(fname, "rb") as f:
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=InputFile(f, filename=fname),
+                    caption=f"✅ Эскиз {i}/3 — {fname}"
+                )
+        else:
+            await bot.send_message(chat_id=chat_id, text=f"⚠️ Не нашёл файл {fname} рядом с bot.py")
+
+
+async def handle_site_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Returns True if handled by scripted flow.
+    """
+    text = (update.message.text or "").strip()
+    if not text:
+        return False
+
+    flow = context.user_data.get("site_flow") or {}
+    step = flow.get("step", 0)
+
+    # Step 0: waiting for service choice "3"
+    if step == 0:
+        if text == "3":
+            flow["step"] = 1
+            context.user_data["site_flow"] = flow
+            reply = "Отлично ✅ Начнём с сайта.\nПодскажите, пожалуйста, название проекта/кофейни (как должно быть на сайте)?"
+            await update.message.reply_text(reply)
+            await db_log_message(int(update.effective_user.id), "out", reply)
+            return True
+        return False  # not in site flow
+
+    # Step 1: name
+    if step == 1:
+        flow["name"] = text
+        flow["step"] = 2
+        context.user_data["site_flow"] = flow
+        reply = "Приняла ✅\nУточните, пожалуйста, город и адрес (для блока «Расположение»)."
+        await update.message.reply_text(reply)
+        await db_log_message(int(update.effective_user.id), "out", reply)
+        return True
+
+    # Step 2: address
+    if step == 2:
+        flow["address"] = text
+        flow["step"] = 3
+        context.user_data["site_flow"] = flow
+        reply = (
+            "Отлично ✅\n"
+            "Сайт нужен в каком формате:\n"
+            "1) простой сайт-визитка (меню/контакты)\n"
+            "2) сайт с заявками (форма/кнопки)\n"
+            "3) сайт с онлайн-заказом (каталог + корзина)"
+        )
+        await update.message.reply_text(reply)
+        await db_log_message(int(update.effective_user.id), "out", reply)
+        return True
+
+    # Step 3: site type
+    if step == 3:
+        if text not in {"1", "2", "3"}:
+            reply = "Пожалуйста, ответьте цифрой: 1 / 2 / 3."
+            await update.message.reply_text(reply)
+            await db_log_message(int(update.effective_user.id), "out", reply)
+            return True
+        flow["site_type"] = text
+        flow["step"] = 4
+        context.user_data["site_flow"] = flow
+        reply = "Поняла ✅\nФормат получения: самовывоз / доставка / оба?"
+        await update.message.reply_text(reply)
+        await db_log_message(int(update.effective_user.id), "out", reply)
+        return True
+
+    # Step 4: fulfillment
+    if step == 4:
+        flow["fulfillment"] = text
+        flow["step"] = 5
+        context.user_data["site_flow"] = flow
+        reply = "Приняла ✅\nОплата: картой / при получении / оба?"
+        await update.message.reply_text(reply)
+        await db_log_message(int(update.effective_user.id), "out", reply)
+        return True
+
+    # Step 5: payment
+    if step == 5:
+        flow["payment"] = text
+        flow["step"] = 6
+        context.user_data["site_flow"] = flow
+        reply = "Супер ✅\nСколько позиций в меню планируется на старте: до 10 / 10–25 / 25–50 / больше?"
+        await update.message.reply_text(reply)
+        await db_log_message(int(update.effective_user.id), "out", reply)
+        return True
+
+    # Step 6: menu size
+    if step == 6:
+        flow["menu_size"] = text
+        flow["step"] = 7
+        context.user_data["site_flow"] = flow
+        reply = "Отлично ✅\nКакие категории будут в каталоге? (перечислите через запятую)"
+        await update.message.reply_text(reply)
+        await db_log_message(int(update.effective_user.id), "out", reply)
+        return True
+
+    # Step 7: categories
+    if step == 7:
+        flow["categories"] = text
+        flow["step"] = 8
+        context.user_data["site_flow"] = flow
+        reply = "Приняла ✅\nДля кофе нужны варианты объёма (например 250/350/450 мл) — да/нет?"
+        await update.message.reply_text(reply)
+        await db_log_message(int(update.effective_user.id), "out", reply)
+        return True
+
+    # Step 8: volumes yes/no
+    if step == 8:
+        flow["volumes"] = text
+        flow["step"] = 9
+        context.user_data["site_flow"] = flow
+        reply = "Ок ✅\nНужны ли добавки (сироп/альт-молоко/extra shot) — да/нет?"
+        await update.message.reply_text(reply)
+        await db_log_message(int(update.effective_user.id), "out", reply)
+        return True
+
+    # Step 9: addons yes/no
+    if step == 9:
+        flow["addons"] = text
+        flow["step"] = 10
+        context.user_data["site_flow"] = flow
+        reply = "Приняла ✅\nВ какой валюте показывать цены: ₾ / $ / € ?"
+        await update.message.reply_text(reply)
+        await db_log_message(int(update.effective_user.id), "out", reply)
+        return True
+
+    # Step 10: currency
+    if step == 10:
+        flow["currency"] = text
+        flow["step"] = 11
+        context.user_data["site_flow"] = flow
+        reply = (
+            "Отлично ✅\n"
+            "Чтобы точно попасть в стиль — пришлите пример дизайна (ссылку), который Вам нравится.\n"
+            "К примеру, можете зайти на https://dribbble.com/ и выбрать вариант по запросу:\n"
+            "coffee to go / coffee shop / online ordering\n"
+            "Пришлите ссылку сюда."
+        )
+        await update.message.reply_text(reply)
+        await db_log_message(int(update.effective_user.id), "out", reply)
+        return True
+
+    # Step 11: waiting for reference link
+    if step == 11:
+        if not _looks_like_link(text):
+            reply = "Пришлите, пожалуйста, ссылку на пример дизайна (например Dribbble)."
+            await update.message.reply_text(reply)
+            await db_log_message(int(update.effective_user.id), "out", reply)
+            return True
+        flow["ref_link"] = text
+        flow["step"] = 12
+        context.user_data["site_flow"] = flow
+        reply = "Приняла ✅ Спасибо!\nСейчас подготовлю эскизы макета в выбранном стиле и пришлю на согласование ✅"
+        await update.message.reply_text(reply)
+        await db_log_message(int(update.effective_user.id), "out", reply)
+
+        await _send_ref_images(context.bot, update.effective_chat.id)
+
+        follow = "Подтвердите, пожалуйста: ОК — и я собираю финальную версию.\nЕсли нужно — напишите, что поменять (цвета/шрифты/порядок блоков)."
+        await update.message.reply_text(follow)
+        await db_log_message(int(update.effective_user.id), "out", follow)
+        return True
+
+    # Step 12: waiting OK/changes
+    if step == 12:
+        if _is_ok(text):
+            flow["step"] = 13
+            context.user_data["site_flow"] = flow
+            msg1 = "Приняла ✅ Собираю финальную версию сайта по утверждённому эскизу.\nСкоро вернусь с ссылкой."
+            await update.message.reply_text(msg1)
+            await db_log_message(int(update.effective_user.id), "out", msg1)
+
+            # emulate "typing" + publish
+            msg2 = f"Готово ✅ Сайт опубликован.\nСсылка: {SITE_PUBLISH_URL}\n\nЧто делаем следующим шагом?\n1) добавить фото товаров\n2) усилить первый экран (оффер + CTA)\n3) подключить интеграцию (CRM/таблица), чтобы заказы уходили автоматически"
+            await update.message.reply_text(msg2)
+            await db_log_message(int(update.effective_user.id), "out", msg2)
+            return True
+        else:
+            # if user sends changes, acknowledge and ask OK again
+            msg = "Приняла ✅ Учту правки и обновлю эскиз. Подтвердите, пожалуйста: ОК — и я собираю финальную версию."
+            await update.message.reply_text(msg)
+            await db_log_message(int(update.effective_user.id), "out", msg)
+            return True
+
+    # Step 13: next step selection after publish
+    if step == 13:
+        if text == "3":
+            flow["step"] = 14
+            context.user_data["site_flow"] = flow
+            msg = (
+                "Приняла ✅ Тогда подключаю сайт к CRM как модуль интеграции, чтобы каждый заказ автоматически уходил в вашу систему.\n\n"
+                "Куда отправлять заказы? (выберите вариант):\n"
+                "1) Google Sheets\n"
+                "2) Notion\n"
+                "3) amoCRM / Bitrix24\n"
+                "4) Webhook URL"
+            )
+            await update.message.reply_text(msg)
+            await db_log_message(int(update.effective_user.id), "out", msg)
+            return True
+        else:
+            # If user picks 1 or 2, accept and finish
+            msg = "Приняла ✅ Сделаю этот шаг следующим. Хотите продолжить (1/2/3) или вернуться позже?"
+            await update.message.reply_text(msg)
+            await db_log_message(int(update.effective_user.id), "out", msg)
+            return True
+
+    # Step 14: CRM destination - finish
+    if step == 14:
+        msg = "Приняла ✅ Зафиксировала. Подключу и пришлю подтверждение после настройки."
+        await update.message.reply_text(msg)
+        await db_log_message(int(update.effective_user.id), "out", msg)
+        return True
+
+    return False
 
 # ============================================================
 # ✅ Telegram handlers
@@ -369,6 +597,7 @@ async def forget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["introduced"] = True
     context.user_data["history"] = []
+    context.user_data["site_flow"] = {"step": 0}  # reset reels flow each /start
 
     user = update.effective_user
     args = context.args or []
@@ -404,11 +633,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not OWNER_ID or str(update.effective_user.id) != str(OWNER_ID):
         return
-
     period = (context.args[0] if context.args else "day").lower()
     if period not in ("day", "week"):
         period = "day"
-
     await send_owner_report(period)
 
 
@@ -426,23 +653,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db_log_message(int(user.id), "in", text)
     await db_log_event(event="message", source="bot", tg_id=int(user.id), meta={"text_preview": text[:160]})
 
+    # --- Scripted reel site flow (if user already filled miniapp and chose 3) ---
+    handled = await handle_site_flow(update, context)
+    if handled:
+        return
+
+    # first-ever message behavior
     if not context.user_data.get("introduced"):
         context.user_data["introduced"] = True
         context.user_data["history"] = []
-
         name_form, niche_form = await db_get_latest_miniapp_profile(int(user.id))
         if niche_form:
             final_name = (name_form or user.first_name or "друг").strip()
-            await update.message.reply_text(
+            msg = (
                 f"Спасибо, {final_name}! ✅\n"
                 f"Зафиксировала: ниша — {niche_form}.\n\n"
                 f"{POST_MINIAPP_TEXT}"
             )
+            await update.message.reply_text(msg)
+            await db_log_message(int(user.id), "out", msg)
         else:
             await update.message.reply_text(WELCOME_TEXT)
+            await db_log_message(int(user.id), "out", WELCOME_TEXT)
         return
 
-    # ===== Gemini flow =====
+    # ===== Gemini fallback =====
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     except Exception:
@@ -467,24 +702,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         answer = ask_gemini(history)
     except Exception as e:
-        err = str(e)
-        low = err.lower()
-        print("Gemini error:", err)
-
-        if "429" in err or "quota" in low or "rate limit" in low:
+        err = str(e).lower()
+        if "429" in err or "quota" in err or "rate limit" in err:
             GLOBAL_LIMIT["blocked_date"] = str(datetime.now(timezone.utc).date())
             await update.message.reply_text("⚠️ Бесплатный лимит на сегодня исчерпан. Попробуйте завтра.")
             return
-
         await update.message.reply_text("⚠️ Ошибка. Попробуйте ещё раз через минуту.")
         return
 
     await update.message.reply_text(answer)
     await db_log_message(int(user.id), "out", answer)
-
     history.append({"role": "model", "parts": [{"text": answer}]})
     context.user_data["history"] = history[-(MAX_TURNS * 2):]
-
 
 # ============================================================
 # ✅ HTTP endpoints
@@ -578,10 +807,8 @@ async def tasks_daily_report(request: web.Request) -> web.Response:
     token = request.headers.get("X-Task-Token") or request.query.get("token")
     if not REPORT_TASK_TOKEN or token != REPORT_TASK_TOKEN:
         return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
-
     await send_owner_report("day")
     return web.json_response({"ok": True})
-
 
 # ============================================================
 # ✅ MAIN
